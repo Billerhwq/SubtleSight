@@ -1,0 +1,69 @@
+server:
+  address: ${SUBTLESIGHT_BIND_ADDRESS:127.0.0.1}
+  port: ${SUBTLESIGHT_PORT:8080}
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        http-only: true
+        same-site: strict
+        secure: ${SUBTLESIGHT_SECURE_COOKIE:false}
+spring:
+  application:
+    name: subtlesight
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  threads:
+    virtual:
+      enabled: true
+  jackson:
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 52MB
+  mvc:
+    problemdetails:
+      enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+subtlesight:
+  data-dir: ${SUBTLESIGHT_DATA_DIR:./data}
+  security:
+    allowed-origins: ${SUBTLESIGHT_ALLOWED_ORIGINS:http://127.0.0.1:8080,http://localhost:8080}
+  provider:
+    ai-base-url: ${SUBTLESIGHT_OPENAI_BASE_URL:}
+    ai-key: ${SUBTLESIGHT_OPENAI_API_KEY:}
+    ai-model: ${SUBTLESIGHT_OPENAI_MODEL:gpt-4.1-mini}
+    search-url: ${SUBTLESIGHT_SEARCH_BASE_URL:}
+    search-key: ${SUBTLESIGHT_SEARCH_API_KEY:}
+  connectors:
+    min-delay-ms: ${SUBTLESIGHT_CONNECTOR_MIN_DELAY_MS:1500}
+  opencli:
+    command: ${SUBTLESIGHT_OPENCLI_COMMAND:opencli}
+    video:
+      enabled: ${SUBTLESIGHT_OPENCLI_VIDEO_ENABLED:false}
+  collect:
+    max-items-per-source: ${SUBTLESIGHT_COLLECT_MAX_ITEMS_PER_SOURCE:12}
+    scheduler:
+      enabled: ${SUBTLESIGHT_COLLECT_SCHEDULER_ENABLED:true}
+      initial-delay-ms: ${SUBTLESIGHT_COLLECT_INITIAL_DELAY_MS:60000}
+      fixed-delay-ms: ${SUBTLESIGHT_COLLECT_FIXED_DELAY_MS:1800000}
+      max-sources: ${SUBTLESIGHT_COLLECT_SCHEDULER_MAX_SOURCES:8}
+      max-items: ${SUBTLESIGHT_COLLECT_SCHEDULER_MAX_ITEMS:3}
+  calendar:
+    scheduler:
+      enabled: ${SUBTLESIGHT_CALENDAR_SCHEDULER_ENABLED:true}
+      initial-delay-ms: ${SUBTLESIGHT_CALENDAR_INITIAL_DELAY_MS:90000}
+      fixed-delay-ms: ${SUBTLESIGHT_CALENDAR_FIXED_DELAY_MS:1800000}
+logging:
+  file:
+    name: ${subtlesight.data-dir}/logs/subtlesight.log
+  pattern:
+    console: "%d{ISO8601} %-5level [%thread] %logger{36} - %msg%n"

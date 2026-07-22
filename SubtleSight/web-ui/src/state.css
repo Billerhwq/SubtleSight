@@ -1,0 +1,33 @@
+.state-panel {
+  gap: 10px;
+  color: #667085;
+}
+.state-panel h2,
+.state-panel p { margin: 0; }
+.native-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid #dfe7f5;
+  border-top-color: #2f6fed;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.state-glyph {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: #eaf0ff;
+  color: #2f6fed;
+  font: 700 22px serif;
+}
+.native-button {
+  border: 0;
+  border-radius: 7px;
+  background: #2f6fed;
+  color: white;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.subtlesight</groupId><artifactId>subtlesight-parent</artifactId><version>1.0.0-SNAPSHOT</version></parent>
+  <artifactId>acceptance-tests</artifactId>
+  <dependencies>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>server-app</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>core-domain</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>storage-sqlite</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>storage-blob</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>search-lucene</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>document-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>signal-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>research-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>evidence-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>watchlist-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>report-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>agent-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>runtime-jobs</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>observability</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.wiremock</groupId><artifactId>wiremock-standalone</artifactId><scope>test</scope></dependency>
+  </dependencies>
+</project>

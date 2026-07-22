@@ -1,0 +1,12 @@
+**/target/
+web-ui/node_modules/
+web-ui/dist/
+web-ui/coverage/
+data/
+build/
+.tmp/
+.idea/
+.vscode/
+*.iml
+*.log
+.env
