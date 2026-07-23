@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Dropdown, Input, Modal, Toast, TreeSelect, Upload } from '@douyinfe/semi-ui';
 import { IconArrowDown, IconArrowUp, IconChevronDown, IconChevronLeft, IconDelete, IconEdit, IconFolder, IconFolderStroked, IconGridRectangle, IconList, IconPlus, IconRefresh, IconSearch } from '@douyinfe/semi-icons';
@@ -22,7 +23,7 @@ function relTime(iso:string){const diff=Date.now()-new Date(iso).getTime();const
 function docKind(ext:string){switch(ext){case'pdf':return{cls:'pdf',label:'PDF'};case'xlsx':case'xls':case'csv':return{cls:'xlsx',label:'X'};case'docx':case'doc':return{cls:'docx',label:'W'};case'md':return{cls:'md',label:'M↓'};case'png':case'jpg':case'jpeg':case'gif':case'webp':case'svg':case'bmp':return{cls:'image',label:'IMG'};case'txt':case'log':return{cls:'txt',label:'TXT'};default:return{cls:'txt',label:ext?ext.slice(0,3).toUpperCase():'FILE'};}}
 const itemName=(item:Item)=>item.kind==='folder'?item.folder.name:item.file.name;
 
-export function KnowledgePage(){
+export function KnowledgePage(): ReactNode {
   const client=useQueryClient();
   const [current,setCurrent]=useState<string|null>(null);
   const [collapsed,setCollapsed]=useState<Set<string>>(new Set());
