@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SubtleSight - 知识库原型</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --surface-soft: #f9fafb;
+      --text-1: #1d2129;
+      --text-2: #4e5969;
+      --text-3: #86909c;
+      --border: #e5e6eb;
+      --border-strong: #c9cdd4;
+      --accent: #ff5a1f;
+      --accent-soft: #fff2e8;
+      --black: #141416;
+      --success: #00a854;
+      --radius: 6px;
+      --sidebar: 218px;
+      --tree: 324px;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--text-1);
+      background: var(--bg);
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-width: 1080px; height: 100%; overflow: hidden; }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid rgba(255, 90, 31, .35);
+      outline-offset: 2px;
+    }
+
+    .app { height: 100vh; display: grid; grid-template-columns: var(--sidebar) 1fr; grid-template-rows: 58px 1fr; }
+
+    .brand {
+      grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: 10px;
+      padding: 0 16px; background: var(--surface); border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo {
+      width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center;
+      color: #fff; font-weight: 700; font-size: 13px; background: var(--accent);
+    }
+    .brand-name { font-size: 15px; font-weight: 700; }
+    .live {
+      margin-left: auto; padding: 2px 7px; border: 1px solid var(--border);
+      border-radius: 10px; color: var(--text-3); font-size: 10px;
+    }
+
+    .topbar {
+      grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 18px;
+      padding: 0 22px; background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .top-context { color: var(--text-3); font-size: 13px; }
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+    .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--black); color: #fff; display: grid; place-items: center; font-size: 11px; }
+
+    .icon-btn {
+      width: 34px; height: 34px; border: 1px solid transparent; border-radius: var(--radius);
+      background: transparent; display: inline-grid; place-items: center; cursor: pointer;
+    }
+    .icon-btn:hover { background: #f2f3f5; border-color: var(--border); }
+    .icon-btn svg, .nav-item svg, .tree-row svg, .breadcrumb svg { width: 17px; height: 17px; stroke-width: 1.8; }
+
+    .sidebar {
+      grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-height: 0;
+      padding: 16px 10px 12px; background: var(--surface); border-right: 1px solid var(--border);
+    }
+    .nav-section { margin-bottom: 18px; }
+    .nav-title { padding: 0 10px 8px; color: var(--text-3); font-size: 11px; font-weight: 500; }
+    .nav-item {
+      position: relative; display: flex; align-items: center; gap: 10px; width: 100%; height: 38px;
+      padding: 0 10px; border: 0; border-radius: var(--radius); background: transparent;
+      color: var(--text-2); cursor: pointer; text-align: left; font-size: 13px;
+    }
+    .nav-item:hover { background: #f2f3f5; }
+    .nav-item.active { background: var(--black); color: #fff; }
+    .nav-item.active::after { content: ""; position: absolute; right: -11px; top: 8px; width: 2px; height: 22px; background: var(--accent); }
+    .count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 10px; font-size: 10px; opacity: .7; }
+    .sidebar-footer { margin-top: auto; border-top: 1px solid var(--border); padding: 12px 8px 0; }
+    .status { display: flex; align-items: center; gap: 8px; height: 32px; color: var(--text-2); font-size: 12px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+
+    .page { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; padding: 26px 26px 22px; overflow: hidden; }
+    .page-head { height: 76px; }
+    h1 { margin: 0 0 6px; font-size: 27px; line-height: 1.15; letter-spacing: 0; }
+    .subtitle { margin: 0; color: var(--text-2); font-size: 13px; }
+
+    .workspace {
+      height: calc(100% - 76px); min-height: 500px; display: grid; grid-template-columns: var(--tree) 1fr;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+    }
+
+    .tree-pane { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
+    .pane-header { height: 62px; padding: 0 14px; display: flex; align-items: center; border-bottom: 1px solid var(--border); }
+    .pane-title { font-size: 14px; font-weight: 600; }
+    .pane-actions { margin-left: auto; display: flex; gap: 6px; }
+    .pane-actions .icon-btn { width: 32px; height: 32px; border-color: var(--border); }
+    .tree-scroll { flex: 1; min-height: 0; padding: 10px 10px 18px; overflow: auto; }
+    .tree-branch { position: relative; }
+    .tree-children { margin-left: 24px; position: relative; }
+    .tree-children::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 14px; border-left: 1px dotted var(--border-strong); }
+    .tree-row {
+      position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; height: 36px;
+      width: 100%; padding: 0 8px; border: 0; border-radius: 4px; background: transparent;
+      color: var(--text-2); cursor: pointer; text-align: left; font-size: 13px;
+    }
+    .tree-row:hover { background: #f2f3f5; }
+    .tree-row.selected { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+    .chev { width: 16px; flex: 0 0 16px; transition: transform .16s ease; }
+    .tree-branch.collapsed > .tree-children { display: none; }
+    .tree-branch.collapsed > .tree-row .chev { transform: rotate(-90deg); }
+    .tree-row.leaf { padding-left: 32px; }
+    .tree-row.leaf::before { content: ""; position: absolute; left: 10px; width: 12px; border-top: 1px dotted var(--border-strong); }
+
+    .content-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    .content-toolbar { min-height: 62px; padding: 10px 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+    .breadcrumb { display: flex; align-items: center; gap: 10px; min-width: 250px; overflow: hidden; color: var(--text-3); font-size: 13px; white-space: nowrap; }
+    .breadcrumb strong { color: var(--text-1); font-weight: 600; }
+    .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .search { position: relative; width: 244px; }
+    .search input { width: 100%; height: 34px; padding: 0 34px 0 12px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-1); background: #fff; font-size: 12px; }
+    .search input:hover { border-color: var(--border-strong); }
+    .search svg { position: absolute; right: 10px; top: 9px; width: 16px; height: 16px; color: var(--text-2); }
+    .segmented { display: flex; height: 34px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .segmented .icon-btn { width: 38px; height: 32px; border: 0; border-radius: 0; }
+    .segmented .icon-btn + .icon-btn { border-left: 1px solid var(--border); }
+    .segmented .icon-btn.active { color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+    .primary { height: 34px; padding: 0 12px; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; border: 1px solid var(--accent); border-radius: var(--radius); color: #fff; background: var(--accent); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+    .primary:hover { background: #e94812; }
+    .primary svg { width: 16px; height: 16px; }
+    .new-wrap { position: relative; }
+    .dropdown { position: absolute; right: 0; top: 40px; z-index: 20; width: 132px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.10); display: none; }
+    .dropdown.open { display: block; }
+    .dropdown button { width: 100%; height: 32px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer; font-size: 12px; }
+    .dropdown button:hover { background: #f2f3f5; }
+
+    .content-meta { height: 46px; display: flex; align-items: center; padding: 0 18px; color: var(--text-3); font-size: 12px; }
+    .file-area { flex: 1; min-height: 0; padding: 0 18px 18px; overflow: auto; }
+    .file-grid { display: grid; grid-template-columns: repeat(5, minmax(126px, 1fr)); gap: 16px; }
+    .file-card { min-width: 0; height: 190px; padding: 16px 14px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; cursor: pointer; transition: border-color .15s, background .15s; }
+    .file-card:hover { border-color: var(--border-strong); background: #fcfcfd; }
+    .file-card.selected { border-color: var(--accent); background: #fffaf7; }
+    .visual { height: 100px; display: grid; place-items: center; }
+    .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+    .meta { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: 11px; }
+
+    .folder-icon { position: relative; width: 68px; height: 47px; border: 1px solid #f59f00; border-radius: 5px; background: linear-gradient(#ffd666, #ffc53d); }
+    .folder-icon::before { content: ""; position: absolute; left: 6px; top: -10px; width: 28px; height: 11px; border: 1px solid #f59f00; border-bottom: 0; border-radius: 4px 4px 0 0; background: #ffc53d; }
+    .folder-badge { position: absolute; right: -10px; bottom: -9px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: var(--text-2); }
+    .folder-badge svg { width: 15px; height: 15px; }
+
+    .doc-icon { position: relative; width: 49px; height: 60px; display: grid; place-items: center; border-radius: 5px; color: #fff; font-size: 21px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(0,0,0,.05); }
+    .doc-icon::after { content: ""; position: absolute; top: 0; right: 0; width: 15px; height: 15px; background: rgba(255,255,255,.72); clip-path: polygon(0 0,100% 100%,0 100%); }
+    .pdf { background: #f53f3f; }
+    .xlsx { background: #00b42a; }
+    .docx { background: #165dff; }
+    .md { background: #4e5969; font-size: 16px; }
+    .image { background: #14c9c9; }
+    .txt { background: #c9cdd4; color: #4e5969; }
+
+    .file-grid.list-view { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .file-grid.list-view .file-card { height: 56px; padding: 0 14px; display: grid; grid-template-columns: 44px minmax(220px, 1fr) 180px; align-items: center; border: 0; border-radius: 0; border-bottom: 1px solid var(--border); }
+    .file-grid.list-view .file-card:last-child { border-bottom: 0; }
+    .file-grid.list-view .visual { height: 44px; display: flex; align-items: center; justify-content: flex-start; }
+    .file-grid.list-view .folder-icon { transform: scale(.48); transform-origin: left center; }
+    .file-grid.list-view .doc-icon { transform: scale(.55); transform-origin: left center; }
+    .file-grid.list-view .name { grid-column: 2; grid-row: 1; }
+    .file-grid.list-view .meta { grid-column: 3; grid-row: 1; margin: 0; text-align: right; }
+
+    .empty { display: none; height: 220px; place-items: center; color: var(--text-3); font-size: 13px; }
+    .toast { position: fixed; left: 50%; bottom: 24px; z-index: 50; transform: translateX(-50%) translateY(20px); padding: 10px 14px; border-radius: var(--radius); color: #fff; background: rgba(20,20,22,.92); opacity: 0; pointer-events: none; transition: .18s ease; font-size: 12px; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 1360px) {
+      :root { --sidebar: 196px; --tree: 290px; }
+      .file-grid { grid-template-columns: repeat(4, minmax(126px, 1fr)); }
+      .breadcrumb { min-width: 170px; }
+      .search { width: 170px; }
+      .content-toolbar, .toolbar-right { gap: 6px; }
+      .primary { padding: 0 9px; gap: 4px; }
+    }
+
+    @media (max-width: 1120px) {
+      :root { --sidebar: 180px; --tree: 250px; }
+      .page { padding: 20px 18px 18px; }
+      .page-head { height: 70px; }
+      .workspace { height: calc(100% - 70px); }
+      .content-toolbar { min-height: 96px; align-content: center; flex-wrap: wrap; }
+      .breadcrumb { width: 100%; min-width: 100%; }
+      .toolbar-right { width: 100%; margin-left: 0; }
+      .search { flex: 1; width: auto; }
+      .file-grid { grid-template-columns: repeat(3, minmax(126px, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="brand">
+      <div class="logo">S</div><span class="brand-name">SubtleSight</span><span class="live">LIVE</span>
+    </header>
+    <header class="topbar">
+      <button class="icon-btn" aria-label="折叠菜单" title="折叠菜单"><i data-lucide="menu"></i></button>
+      <span class="top-context">Live · 本机数据</span>
+      <div class="top-actions"><button class="icon-btn" aria-label="通知" title="通知"><i data-lucide="bell"></i></button><div class="avatar">SS</div></div>
+    </header>
+
+    <aside class="sidebar">
+      <nav>
+        <section class="nav-section">
+          <div class="nav-title">工作区</div>
+          <button class="nav-item"><i data-lucide="radar"></i><span>发现</span></button>
+          <button class="nav-item"><i data-lucide="calendar-days"></i><span>财经日历</span></button>
+          <button class="nav-item"><i data-lucide="eye"></i><span>Watchlist</span><span class="count">4</span></button>
+          <button class="nav-item active"><i data-lucide="library-big"></i><span>知识库</span></button>
+        </section>
+        <section class="nav-section">
+          <div class="nav-title">输出</div>
+          <button class="nav-item"><i data-lucide="file-text"></i><span>报告</span><span class="count">3</span></button>
+          <button class="nav-item"><i data-lucide="list-filter"></i><span>自定义视图</span></button>
+        </section>
+        <section class="nav-section">
+          <div class="nav-title">系统</div>
+          <button class="nav-item"><i data-lucide="rss"></i><span>信源</span><span class="count">2</span></button>
+          <button class="nav-item"><i data-lucide="activity"></i><span>任务中心</span><span class="count">5</span></button>
+          <button class="nav-item"><i data-lucide="sliders-horizontal"></i><span>设置</span></button>
+        </section>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="status"><span class="status-dot"></span><span>API 已联通</span></div>
+        <div class="status"><i data-lucide="database"></i><span>索引已同步</span></div>
+      </div>
+    </aside>
+
+    <main class="page">
+      <div class="page-head"><h1>知识库</h1><p class="subtitle">集中管理研究资料、项目文档与团队知识。</p></div>
+      <section class="workspace">
+        <aside class="tree-pane">
+          <div class="pane-header"><span class="pane-title">知识树</span><div class="pane-actions">
+            <button class="icon-btn" id="addFolder" aria-label="新建文件夹" title="新建文件夹"><i data-lucide="folder-plus"></i></button>
+            <button class="icon-btn" id="refreshTree" aria-label="刷新知识树" title="刷新知识树"><i data-lucide="refresh-cw"></i></button>
+            <button class="icon-btn" id="collapseTree" aria-label="全部折叠" title="全部折叠"><i data-lucide="panel-left-close"></i></button>
+          </div></div>
+          <div class="tree-scroll" id="tree">
+            <div class="tree-branch">
+              <button class="tree-row branch-row"><i class="chev" data-lucide="chevron-down"></i><i data-lucide="database"></i><span>我的知识库</span></button>
+              <div class="tree-children">
+                <div class="tree-branch">
+                  <button class="tree-row branch-row"><i class="chev" data-lucide="chevron-down"></i><i data-lucide="folder"></i><span>行业研究</span></button>
+                  <div class="tree-children">
+                    <button class="tree-row leaf selected" data-path="行业研究 / 人工智能"><i data-lucide="folder"></i><span>人工智能</span></button>
+                    <button class="tree-row leaf" data-path="行业研究 / 新能源"><i data-lucide="folder"></i><span>新能源</span></button>
+                    <button class="tree-row leaf" data-path="行业研究 / 消费零售"><i data-lucide="folder"></i><span>消费零售</span></button>
+                  </div>
+                </div>
+                <div class="tree-branch">
+                  <button class="tree-row branch-row"><i class="chev" data-lucide="chevron-down"></i><i data-lucide="folder"></i><span>项目资料</span></button>
+                  <div class="tree-children">
+                    <button class="tree-row leaf" data-path="项目资料 / Manifest"><i data-lucide="folder"></i><span>Manifest</span></button>
+                    <button class="tree-row leaf" data-path="项目资料 / Bolna Agent Studio"><i data-lucide="folder"></i><span>Bolna Agent Studio</span></button>
+                  </div>
+                </div>
+                <button class="tree-row leaf" data-path="产品文档"><i data-lucide="folder"></i><span>产品文档</span></button>
+                <button class="tree-row leaf" data-path="数据与报告"><i data-lucide="folder"></i><span>数据与报告</span></button>
+                <button class="tree-row leaf" data-path="归档"><i data-lucide="folder"></i><span>归档</span></button>
+              </div>
+            </div>
+            <div class="tree-branch collapsed">
+              <button class="tree-row branch-row"><i class="chev" data-lucide="chevron-down"></i><i data-lucide="users"></i><span>Shared with me</span></button>
+              <div class="tree-children"></div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="content-pane">
+          <div class="content-toolbar">
+            <div class="breadcrumb"><i data-lucide="library-big"></i><span>知识库</span><span>/</span><span id="crumbParent">行业研究</span><span>/</span><strong id="crumbCurrent">人工智能</strong></div>
+            <div class="toolbar-right">
+              <label class="search"><input id="search" type="search" placeholder="搜索文件或文件夹" spellcheck="false"><i data-lucide="search"></i></label>
+              <div class="segmented" aria-label="视图切换">
+                <button class="icon-btn active" id="gridBtn" aria-label="网格视图" title="网格视图"><i data-lucide="grid-2x2"></i></button>
+                <button class="icon-btn" id="listBtn" aria-label="列表视图" title="列表视图"><i data-lucide="list"></i></button>
+              </div>
+              <button class="icon-btn" id="sortBtn" aria-label="排序" title="按名称排序"><i data-lucide="arrow-up-down"></i></button>
+              <button class="icon-btn" aria-label="更多" title="更多"><i data-lucide="ellipsis"></i></button>
+              <div class="new-wrap"><button class="primary" id="newBtn"><i data-lucide="plus"></i><span>新建</span><i data-lucide="chevron-down"></i></button>
+                <div class="dropdown" id="newMenu"><button data-action="新建文件夹">新建文件夹</button><button data-action="上传文件">上传文件</button><button data-action="新建文档">新建文档</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="content-meta"><span id="itemCount">共 12 项 · 更新于 10 分钟前</span></div>
+          <div class="file-area"><div class="file-grid" id="fileGrid"></div><div class="empty" id="empty">没有匹配的文件或文件夹</div></div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script>
+    const items = [
+      { kind: 'folder', name: '大模型', meta: '5 项 · 今天' },
+      { kind: 'folder', name: 'Agent 框架', meta: '8 项 · 今天', badge: 'network' },
+      { kind: 'folder', name: '论文与资料', meta: '12 项 · 昨天', badge: 'file-text' },
+      { kind: 'folder', name: '竞品分析', meta: '6 项 · 昨天', badge: 'chart-no-axes-column' },
+      { kind: 'folder', name: '会议记录', meta: '3 项 · 2 天前', badge: 'users' },
+      { kind: 'pdf', name: 'AI 行业周报.pdf', meta: '2.4 MB · 今天', label: 'PDF' },
+      { kind: 'xlsx', name: '模型评测.xlsx', meta: '1.8 MB · 今天', label: 'X' },
+      { kind: 'docx', name: '知识图谱设计.docx', meta: '3.2 MB · 昨天', label: 'W' },
+      { kind: 'md', name: 'RAG 技术调研.md', meta: '李明 · 昨天', label: 'M↓', selected: true },
+      { kind: 'image', name: '架构草图.png', meta: '1.6 MB · 2 天前', label: 'IMG' },
+      { kind: 'txt', name: '数据采集说明.txt', meta: '3.6 KB · 2 天前', label: 'TXT' },
+      { kind: 'docx', name: '产品需求文档.docx', meta: '2.7 MB · 3 天前', label: 'W' }
+    ];
+
+    const grid = document.getElementById('fileGrid');
+    const empty = document.getElementById('empty');
+    const search = document.getElementById('search');
+    const count = document.getElementById('itemCount');
+    let ascending = true;
+
+    function render(list = items) {
+      grid.innerHTML = list.map(item => {
+        const visual = item.kind === 'folder'
+          ? `<div class="folder-icon">${item.badge ? `<span class="folder-badge"><i data-lucide="${item.badge}"></i></span>` : ''}</div>`
+          : `<div class="doc-icon ${item.kind}">${item.label}</div>`;
+        return `<article class="file-card${item.selected ? ' selected' : ''}" tabindex="0" data-name="${item.name}">
+          <div class="visual">${visual}</div><div class="name" title="${item.name}">${item.name}</div><div class="meta">${item.meta}</div></article>`;
+      }).join('');
+      empty.style.display = list.length ? 'none' : 'grid';
+      grid.style.display = list.length ? (grid.classList.contains('list-view') ? 'flex' : 'grid') : 'none';
+      count.textContent = `共 ${list.length} 项 · 更新于 10 分钟前`;
+      if (window.lucide) lucide.createIcons();
+      document.querySelectorAll('.file-card').forEach(card => {
+        card.addEventListener('click', () => selectCard(card));
+        card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCard(card); } });
+      });
+    }
+
+    function selectCard(card) {
+      document.querySelectorAll('.file-card').forEach(el => el.classList.remove('selected'));
+      card.classList.add('selected');
+      toast(`已选择：${card.dataset.name}`);
+    }
+
+    function toast(message) {
+      const el = document.getElementById('toast');
+      el.textContent = message; el.classList.add('show');
+      clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => el.classList.remove('show'), 1500);
+    }
+
+    document.querySelectorAll('.branch-row').forEach(row => row.addEventListener('click', () => row.parentElement.classList.toggle('collapsed')));
+    document.querySelectorAll('.tree-row[data-path]').forEach(row => row.addEventListener('click', () => {
+      document.querySelectorAll('.tree-row.selected').forEach(el => el.classList.remove('selected'));
+      row.classList.add('selected');
+      const parts = row.dataset.path.split(' / ');
+      document.getElementById('crumbParent').textContent = parts.length > 1 ? parts[0] : '我的知识库';
+      document.getElementById('crumbCurrent').textContent = parts.at(-1);
+      search.value = ''; render(items); toast(`已打开：${parts.at(-1)}`);
+    }));
+
+    search.addEventListener('input', () => {
+      const key = search.value.trim().toLowerCase();
+      render(items.filter(item => item.name.toLowerCase().includes(key)));
+    });
+
+    document.getElementById('gridBtn').addEventListener('click', () => {
+      grid.classList.remove('list-view'); document.getElementById('gridBtn').classList.add('active'); document.getElementById('listBtn').classList.remove('active'); render(items.filter(item => item.name.toLowerCase().includes(search.value.trim().toLowerCase())));
+    });
+    document.getElementById('listBtn').addEventListener('click', () => {
+      grid.classList.add('list-view'); document.getElementById('listBtn').classList.add('active'); document.getElementById('gridBtn').classList.remove('active'); render(items.filter(item => item.name.toLowerCase().includes(search.value.trim().toLowerCase())));
+    });
+    document.getElementById('sortBtn').addEventListener('click', () => {
+      ascending = !ascending; items.sort((a,b) => ascending ? a.name.localeCompare(b.name, 'zh-CN') : b.name.localeCompare(a.name, 'zh-CN')); render(items); toast(ascending ? '已按名称升序排列' : '已按名称降序排列');
+    });
+    document.getElementById('collapseTree').addEventListener('click', () => { document.querySelectorAll('.tree-branch').forEach(el => el.classList.add('collapsed')); toast('知识树已折叠'); });
+    document.getElementById('refreshTree').addEventListener('click', e => { e.currentTarget.querySelector('svg')?.animate([{transform:'rotate(0)'},{transform:'rotate(360deg)'}],{duration:420}); toast('知识树已刷新'); });
+    document.getElementById('addFolder').addEventListener('click', () => toast('新建文件夹操作'));
+    document.getElementById('newBtn').addEventListener('click', e => { e.stopPropagation(); document.getElementById('newMenu').classList.toggle('open'); });
+    document.querySelectorAll('#newMenu button').forEach(btn => btn.addEventListener('click', () => { document.getElementById('newMenu').classList.remove('open'); toast(btn.dataset.action); }));
+    document.addEventListener('click', () => document.getElementById('newMenu').classList.remove('open'));
+
+    render();
+  </script>
+</body>
+</html>

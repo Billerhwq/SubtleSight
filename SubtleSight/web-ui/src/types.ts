@@ -12,3 +12,5 @@ export interface ChangeEvent{id:string;field:string;oldValue?:string;newValue?:s
 export interface ReportVersion{id:string;researchRunId:string;reportType:string;version:number;title:string;markdown:string;html:string;citationsVerified:boolean;createdAt:string}
 export interface SavedView{id:string;name:string;expression:string;enabled:boolean;version:number}
 export interface Job{id:string;type:string;status:string;priority:number;attempt:number;errorCode?:string;createdAt:string}
+export interface KnowledgeFolder{id:string;parentId?:string;name:string;createdAt:string;updatedAt:string}
+export interface KnowledgeFile{id:string;folderId?:string;name:string;ext:string;mimeType?:string;sizeBytes:number;sha256:string;createdAt:string;updatedAt:string}
