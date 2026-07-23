@@ -1,0 +1,138 @@
+export type SourceType = 'RSS' | 'WEBSITE' | 'SITEMAP' | 'GITHUB' | 'ARXIV' | 'HN' | 'HUGGING_FACE' | 'PRODUCT_HUNT' | 'VIDEO' | 'REDDIT' | 'NEWS_API' | 'NEWSLETTER' | 'CUSTOM_API' | 'UPLOAD';
+export type ViewType = 'FOR_YOU' | 'EMERGING' | 'IMPORTANT' | 'LATEST' | 'SAVED';
+export interface Source {
+    id: string;
+    name: string;
+    type: SourceType;
+    kind: string;
+    endpoint: string;
+    schedule?: string;
+    tier: string;
+    health: string;
+    topics: string[];
+    enabled: boolean;
+    updatedAt: string;
+}
+export interface Story {
+    id: string;
+    title: string;
+    summary?: string;
+    status: string;
+    firstObservedAt: string;
+    lastObservedAt: string;
+    sourceCount: number;
+    sourceFamilyCount: number;
+    entities: string[];
+    topics: string[];
+    manualOverride: boolean;
+}
+export interface Signal {
+    score: number;
+    reasonCodes: string[];
+    features: Record<string, number>;
+    computedAt: string;
+    viewType: ViewType;
+}
+export interface FeedItem {
+    story: Story;
+    signal: Signal;
+    saved: boolean;
+    hidden: boolean;
+    timeline: StoryMember[];
+}
+export interface StoryMember {
+    storyId: string;
+    documentVersionId: string;
+    role: string;
+    sourceFamily: string;
+    similarity: number;
+    addedAt: string;
+}
+export interface ResearchRun {
+    id: string;
+    storyId?: string;
+    question: string;
+    mode: string;
+    status: string;
+    usage: {
+        queries: number;
+        pages: number;
+        tokens: number;
+        cost: number;
+    };
+    gaps: string[];
+    updatedAt: string;
+}
+export interface Claim {
+    id: string;
+    statement: string;
+    status: string;
+    critical: boolean;
+}
+export interface WatchTarget {
+    id: string;
+    type: string;
+    name: string;
+    expression: string;
+    baselineJson?: string;
+    baselineVersion: number;
+    enabled: boolean;
+    updatedAt: string;
+}
+export interface ChangeEvent {
+    id: string;
+    field: string;
+    oldValue?: string;
+    newValue?: string;
+    source: string;
+    rule: string;
+    confidence: number;
+    severity: string;
+    status: string;
+    detectedAt: string;
+}
+export interface ReportVersion {
+    id: string;
+    researchRunId: string;
+    reportType: string;
+    version: number;
+    title: string;
+    markdown: string;
+    html: string;
+    citationsVerified: boolean;
+    createdAt: string;
+}
+export interface SavedView {
+    id: string;
+    name: string;
+    expression: string;
+    enabled: boolean;
+    version: number;
+}
+export interface Job {
+    id: string;
+    type: string;
+    status: string;
+    priority: number;
+    attempt: number;
+    errorCode?: string;
+    createdAt: string;
+}
+export interface KnowledgeFolder {
+    id: string;
+    parentId?: string;
+    name: string;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface KnowledgeFile {
+    id: string;
+    folderId?: string;
+    name: string;
+    ext: string;
+    mimeType?: string;
+    sizeBytes: number;
+    sha256: string;
+    createdAt: string;
+    updatedAt: string;
+}

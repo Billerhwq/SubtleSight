@@ -1,0 +1,5 @@
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+export function StatePanel({ loading, error, empty, onRetry, children }) { if (loading)
+    return _jsxs("div", { className: "state-panel", children: [_jsx("span", { className: "native-spinner" }), _jsx("strong", { children: "\u6B63\u5728\u6574\u7406\u60C5\u62A5\u2026" })] }); if (error)
+    return _jsxs("div", { className: "state-panel", children: [_jsx("span", { className: "state-glyph", children: "!" }), _jsx("h2", { children: "\u6570\u636E\u6682\u65F6\u4E0D\u53EF\u7528" }), _jsx("p", { children: error.message }), onRetry && _jsx("button", { className: "native-button", onClick: onRetry, children: "\u91CD\u8BD5" })] }); if (empty)
+    return _jsxs("div", { className: "state-panel", children: [_jsx("span", { className: "state-glyph", children: "\u5FAE" }), _jsx("h2", { children: "\u8FD8\u6CA1\u6709\u60C5\u62A5" }), _jsx("p", { children: "\u6DFB\u52A0\u6765\u6E90\u6216\u53D1\u8D77\u4E00\u6B21\u5168\u7F51\u53D1\u73B0\uFF0C\u7ED3\u679C\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC\u3002" })] }); return _jsx(_Fragment, { children: children }); }

@@ -1,0 +1,5 @@
+import { jsx as _jsx } from "react/jsx-runtime";
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { StatePanel } from '../components/StatePanel';
+describe('StatePanel', () => { it('renders loading, empty and content states', () => { const { rerender } = render(_jsx(StatePanel, { loading: true, children: _jsx("div", { children: "content" }) })); expect(screen.getByText('正在整理情报…')).toBeInTheDocument(); rerender(_jsx(StatePanel, { empty: true, children: _jsx("div", { children: "content" }) })); expect(screen.getByText('还没有情报')).toBeInTheDocument(); rerender(_jsx(StatePanel, { children: _jsx("div", { children: "content" }) })); expect(screen.getByText('content')).toBeInTheDocument(); }); it('renders provider errors and retries', () => { const retry = vi.fn(); render(_jsx(StatePanel, { error: new Error('provider degraded'), onRetry: retry, children: _jsx("div", {}) })); expect(screen.getByText('provider degraded')).toBeInTheDocument(); fireEvent.click(screen.getByText('重试')); expect(retry).toHaveBeenCalledOnce(); }); });
