@@ -2,6 +2,8 @@ package com.subtlesight.server;
 
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeFile;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeFolder;
+import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeDocument;
+import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeDocumentVersion;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.core.io.InputStreamResource;
@@ -42,6 +44,57 @@ public class KnowledgeController {
     @GetMapping("/files")
     List<KnowledgeFile> files(@RequestParam(required = false) UUID folderId) {
         return knowledge.files(folderId);
+    }
+
+    @GetMapping("/documents")
+    List<KnowledgeDocument> documents(@RequestParam(required = false) UUID folderId,
+                                      @RequestParam(defaultValue = "true") boolean all) {
+        return knowledge.documents(folderId, all);
+    }
+
+    @PostMapping("/documents")
+    KnowledgeDocument createDocument(@RequestBody DocumentCreateRequest request) {
+        return knowledge.createDocument(
+                request.folderId(), request.title(), request.contentHtml(), request.drawingJson());
+    }
+
+    @GetMapping("/documents/{id}")
+    KnowledgeDocument document(@PathVariable UUID id) {
+        return knowledge.requireDocument(id);
+    }
+
+    @PutMapping("/documents/{id}")
+    KnowledgeDocument updateDocument(@PathVariable UUID id, @RequestBody DocumentUpdateRequest request) {
+        return knowledge.updateDocument(
+                id, request.folderId(), request.title(), request.contentHtml(), request.drawingJson(),
+                request.expectedVersion(), request.changeSummary());
+    }
+
+    @DeleteMapping("/documents/{id}")
+    void deleteDocument(@PathVariable UUID id) {
+        knowledge.deleteDocument(id);
+    }
+
+    @GetMapping("/documents/{id}/versions")
+    List<KnowledgeDocumentVersion> documentVersions(@PathVariable UUID id) {
+        return knowledge.documentVersions(id);
+    }
+
+    @GetMapping("/documents/{id}/versions/{version}")
+    KnowledgeDocumentVersion documentVersion(@PathVariable UUID id, @PathVariable int version) {
+        return knowledge.requireDocumentVersion(id, version);
+    }
+
+    @PostMapping("/documents/{id}/versions/{version}/restore")
+    KnowledgeDocument restoreDocumentVersion(@PathVariable UUID id, @PathVariable int version,
+                                             @RequestBody RestoreVersionRequest request) {
+        return knowledge.restoreDocumentVersion(id, version, request.expectedVersion());
+    }
+
+    @PostMapping("/documents/{id}/ai-assist")
+    KnowledgeService.AiSuggestion assistDocument(@PathVariable UUID id,
+                                                 @RequestBody AiAssistRequest request) {
+        return knowledge.assistDocument(id, request.instruction(), request.selectedText());
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -140,4 +193,9 @@ public class KnowledgeController {
     public record FolderRequest(UUID parentId, @NotBlank String name) {}
     public record RenameRequest(@NotBlank String name) {}
     public record MoveRequest(UUID folderId) {}
+    public record DocumentCreateRequest(UUID folderId, String title, String contentHtml, String drawingJson) {}
+    public record DocumentUpdateRequest(UUID folderId, String title, String contentHtml, String drawingJson,
+                                        int expectedVersion, String changeSummary) {}
+    public record RestoreVersionRequest(int expectedVersion) {}
+    public record AiAssistRequest(String instruction, String selectedText) {}
 }

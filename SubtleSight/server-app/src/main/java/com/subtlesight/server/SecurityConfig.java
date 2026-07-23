@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -21,8 +22,10 @@ import java.util.stream.Collectors;
 @Configuration
 public class SecurityConfig {
     @Bean SecurityFilterChain security(HttpSecurity http,@Value("${subtlesight.security.allowed-origins}")String origins)throws Exception{
+        CookieCsrfTokenRepository csrf = CookieCsrfTokenRepository.withHttpOnlyFalse();
+        csrf.setCookiePath("/");
         http.authorizeHttpRequests(auth->auth.anyRequest().permitAll())
-                .csrf(c->c.disable())
+                .csrf(c->c.csrfTokenRepository(csrf))
                 .addFilterBefore(new OriginValidationFilter(origins),SecurityContextHolderFilter.class)
                 .headers(headers->headers.frameOptions(fo->fo.sameOrigin()))
                 .formLogin(form->form.disable())

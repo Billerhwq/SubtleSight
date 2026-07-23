@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Layout, Nav, Spin } from '@douyinfe/semi-ui';
-import { IconArticle, IconBolt, IconFolderStroked, IconHome, IconList, IconMenu, IconSearch, IconSetting } from '@douyinfe/semi-icons';
+import { IconArticle, IconBolt, IconEdit, IconFolderStroked, IconHome, IconList, IconMenu, IconSearch, IconSetting } from '@douyinfe/semi-icons';
 import { get } from './api/client';
 import { useUi } from './store/ui';
 
@@ -12,6 +12,7 @@ const StoryPage = lazy<React.ComponentType<object>>(() => import('./pages/StoryP
 const ResearchPage = lazy<React.ComponentType<object>>(() => import('./pages/ResearchPage').then(m => ({ default: m.ResearchPage }) as unknown as { default: React.ComponentType }));
 const WatchlistPage = lazy<React.ComponentType<object>>(() => import('./pages/WatchlistPage').then(m => ({ default: m.WatchlistPage }) as unknown as { default: React.ComponentType }));
 const KnowledgePage = lazy<React.ComponentType<object>>(() => import('./pages/KnowledgePage').then(m => ({ default: m.KnowledgePage }) as unknown as { default: React.ComponentType }));
+const KnowledgeEditorPage = lazy<React.ComponentType<object>>(() => import('./pages/KnowledgeEditorPage').then(m => ({ default: m.KnowledgeEditorPage }) as unknown as { default: React.ComponentType }));
 const ReportsPage = lazy<React.ComponentType<object>>(() => import('./pages/ReportsPage').then(m => ({ default: m.ReportsPage }) as unknown as { default: React.ComponentType }));
 const AdminPage = lazy<React.ComponentType<object>>(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage }) as unknown as { default: React.ComponentType }));
 const AgentDrawer = lazy<React.ComponentType<object>>(() => import('./components/AgentDrawer').then(m => ({ default: m.AgentDrawer }) as unknown as { default: React.ComponentType }));
@@ -51,11 +52,14 @@ function Workspace(props: { user: string }): ReactNode {
     { itemKey: '/research', text: '研究', icon: React.createElement(IconSearch) },
     { itemKey: '/watchlists', text: '跟踪', icon: React.createElement(IconArticle) },
     { itemKey: '/knowledge', text: '知识库', icon: React.createElement(IconFolderStroked) },
+    { itemKey: '/knowledge/editor', text: '编辑', icon: React.createElement(IconEdit) },
     { itemKey: '/reports', text: '报告', icon: React.createElement(IconArticle) },
     { itemKey: '/admin', text: '系统管理', icon: React.createElement(IconSetting) },
   ];
 
-  const selected = '/' + location.pathname.split('/')[1];
+  const selected = location.pathname.startsWith('/knowledge/editor')
+    ? '/knowledge/editor'
+    : '/' + location.pathname.split('/')[1];
 
   return (
     <Layout className="app-shell">
@@ -93,6 +97,7 @@ function Workspace(props: { user: string }): ReactNode {
               <Route path="/research" element={<ResearchPage />} />
               <Route path="/research/:id" element={<ResearchPage />} />
               <Route path="/watchlists" element={<WatchlistPage />} />
+              <Route path="/knowledge/editor" element={<KnowledgeEditorPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/admin" element={<AdminPage />} />

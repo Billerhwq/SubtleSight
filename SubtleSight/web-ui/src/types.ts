@@ -14,3 +14,6 @@ export interface SavedView{id:string;name:string;expression:string;enabled:boole
 export interface Job{id:string;type:string;status:string;priority:number;attempt:number;errorCode?:string;createdAt:string}
 export interface KnowledgeFolder{id:string;parentId?:string;name:string;createdAt:string;updatedAt:string}
 export interface KnowledgeFile{id:string;folderId?:string;name:string;ext:string;mimeType?:string;sizeBytes:number;sha256:string;createdAt:string;updatedAt:string}
+export interface KnowledgeDocument{id:string;folderId?:string;title:string;contentHtml:string;drawingJson:string;version:number;createdAt:string;updatedAt:string}
+export interface KnowledgeDocumentVersion{documentId:string;version:number;title:string;contentHtml:string;drawingJson:string;changeSummary:string;createdAt:string}
+export interface KnowledgeAiSuggestion{suggestion:string;provider:string;model:string;fallback:boolean}

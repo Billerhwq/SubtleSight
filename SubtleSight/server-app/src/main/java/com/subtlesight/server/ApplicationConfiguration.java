@@ -50,7 +50,7 @@ public class ApplicationConfiguration {
     @Bean CalendarRepository calendarRepository(DataSource dataSource,ObjectMapper json){return new SqliteCalendarRepository(dataSource,json);}
     @Bean BlobStore blobStore(Path dataDirectory){return new ContentAddressedBlobStore(dataDirectory.resolve("blobs"));}
     @Bean SqliteKnowledgeRepository knowledgeRepository(DataSource dataSource){return new SqliteKnowledgeRepository(dataSource);}
-    @Bean KnowledgeService knowledgeService(SqliteKnowledgeRepository knowledgeRepository,Path dataDirectory,Clock clock){return new KnowledgeService(knowledgeRepository,dataDirectory.resolve("knowledge"),clock);}
+    @Bean KnowledgeService knowledgeService(SqliteKnowledgeRepository knowledgeRepository,Path dataDirectory,Clock clock,AiProvider ai,ObjectMapper json){return new KnowledgeService(knowledgeRepository,dataDirectory.resolve("knowledge"),clock,ai,json);}
     @Bean(destroyMethod="close")SearchIndex searchIndex(Path dataDirectory){return new LuceneHybridIndex(dataDirectory.resolve("lucene"));}
     @Bean SubtleSightFacade facade(IntelligenceRepository repository,BlobStore blobStore,SearchIndex search,Clock clock){return new SubtleSightFacade(repository,blobStore,search,clock);}
     @Bean SafeHttpClient safeHttpClient(@Value("${subtlesight.connectors.min-delay-ms:1500}")long minDelayMs){return new SafeHttpClient(Duration.ofSeconds(30),5,50*1024*1024,Duration.ofMillis(Math.max(0,minDelayMs)));}

@@ -1,9 +1,15 @@
 package com.subtlesight.server;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.subtlesight.application.Ports.AiProvider;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository;
+import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeDocument;
+import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeDocumentVersion;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeFile;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeFolder;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -31,15 +37,23 @@ import org.apache.tika.exception.TikaException;
 public class KnowledgeService {
     private static final int COPY_BUFFER_SIZE = 1024 * 1024;
     private static final int MAX_NAME_LENGTH = 200;
+    private static final int MAX_DOCUMENT_HTML_LENGTH = 2 * 1024 * 1024;
+    private static final int MAX_DRAWING_JSON_LENGTH = 1024 * 1024;
+    private static final String EMPTY_DRAWING = "{\"nodes\":[],\"edges\":[]}";
 
     private final SqliteKnowledgeRepository repository;
     private final Path storageDir;
     private final Clock clock;
+    private final AiProvider ai;
+    private final ObjectMapper json;
 
-    public KnowledgeService(SqliteKnowledgeRepository repository, Path storageDir, Clock clock) {
+    public KnowledgeService(SqliteKnowledgeRepository repository, Path storageDir, Clock clock,
+                            AiProvider ai, ObjectMapper json) {
         this.repository = repository;
         this.storageDir = storageDir;
         this.clock = clock;
+        this.ai = ai;
+        this.json = json;
         try {
             Files.createDirectories(storageDir);
         } catch (IOException e) {
@@ -129,6 +143,127 @@ public class KnowledgeService {
         } catch (IOException ignored) {
         }
     }
+
+    public List<KnowledgeDocument> documents(UUID folderId, boolean all) {
+        if (folderId != null && !repository.folderExists(folderId))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found");
+        return all ? repository.listDocuments() : repository.listDocuments(folderId);
+    }
+
+    public KnowledgeDocument requireDocument(UUID id) {
+        return repository.findDocument(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "document not found"));
+    }
+
+    @Transactional
+    public KnowledgeDocument createDocument(UUID folderId, String title, String contentHtml, String drawingJson) {
+        if (folderId != null && !repository.folderExists(folderId))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found");
+        Instant now = Instant.now(clock);
+        KnowledgeDocument document = new KnowledgeDocument(
+                UUID.randomUUID(),
+                folderId,
+                sanitizeDocumentTitle(title),
+                normalizeDocumentHtml(contentHtml),
+                normalizeDrawingJson(drawingJson),
+                1,
+                now,
+                now);
+        repository.insertDocument(document);
+        repository.insertDocumentVersion(new KnowledgeDocumentVersion(
+                document.id(), document.version(), document.title(), document.contentHtml(),
+                document.drawingJson(), "创建文档", now));
+        return document;
+    }
+
+    @Transactional
+    public KnowledgeDocument updateDocument(UUID id, UUID folderId, String title, String contentHtml,
+                                            String drawingJson, int expectedVersion, String changeSummary) {
+        KnowledgeDocument existing = requireDocument(id);
+        if (folderId != null && !repository.folderExists(folderId))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found");
+        if (expectedVersion < 1)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "expectedVersion must be positive");
+        if (existing.version() != expectedVersion)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "document changed on another client; reload before saving");
+
+        String cleanTitle = sanitizeDocumentTitle(title);
+        String cleanHtml = normalizeDocumentHtml(contentHtml);
+        String cleanDrawing = normalizeDrawingJson(drawingJson);
+        Instant now = Instant.now(clock);
+        int changed = repository.updateDocument(
+                id, folderId, cleanTitle, cleanHtml, cleanDrawing, expectedVersion, now);
+        if (changed != 1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "document changed on another client; reload before saving");
+
+        KnowledgeDocument saved = requireDocument(id);
+        repository.insertDocumentVersion(new KnowledgeDocumentVersion(
+                saved.id(), saved.version(), saved.title(), saved.contentHtml(), saved.drawingJson(),
+                normalizeChangeSummary(changeSummary), now));
+        return saved;
+    }
+
+    public List<KnowledgeDocumentVersion> documentVersions(UUID id) {
+        requireDocument(id);
+        return repository.listDocumentVersions(id);
+    }
+
+    public KnowledgeDocumentVersion requireDocumentVersion(UUID id, int version) {
+        requireDocument(id);
+        return repository.findDocumentVersion(id, version)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "document version not found"));
+    }
+
+    @Transactional
+    public KnowledgeDocument restoreDocumentVersion(UUID id, int version, int expectedVersion) {
+        KnowledgeDocumentVersion snapshot = requireDocumentVersion(id, version);
+        KnowledgeDocument current = requireDocument(id);
+        return updateDocument(
+                id,
+                current.folderId(),
+                snapshot.title(),
+                snapshot.contentHtml(),
+                snapshot.drawingJson(),
+                expectedVersion,
+                "恢复到 V" + version);
+    }
+
+    public void deleteDocument(UUID id) {
+        requireDocument(id);
+        repository.deleteDocument(id);
+    }
+
+    public AiSuggestion assistDocument(UUID id, String instruction, String selectedText) {
+        KnowledgeDocument document = requireDocument(id);
+        String cleanInstruction = instruction == null || instruction.isBlank()
+                ? "完善结构并提炼要点"
+                : instruction.strip();
+        String context = selectedText == null || selectedText.isBlank()
+                ? stripHtml(document.contentHtml())
+                : selectedText.strip();
+        if (context.length() > 12_000) context = context.substring(0, 12_000);
+        String fallback = fallbackSuggestion(document.title(), cleanInstruction, context);
+
+        try {
+            AiProvider.AiResult result = ai.complete(new AiProvider.AiRequest(
+                    "knowledge-document-assist",
+                    "你是知识库文档编辑助手。只返回 JSON，字段 suggestion 为可直接插入文档的简洁中文纯文本；不要返回 Markdown 代码围栏。",
+                    "文档标题：" + document.title() + "\n编辑指令：" + cleanInstruction + "\n当前内容：\n" + context,
+                    "{\"type\":\"object\",\"properties\":{\"suggestion\":{\"type\":\"string\"}},\"required\":[\"suggestion\"]}",
+                    900,
+                    0.2));
+            String suggestion = parseAiSuggestion(result.content());
+            if (suggestion == null || suggestion.isBlank())
+                return new AiSuggestion(fallback, "local-fallback", "rules", true);
+            return new AiSuggestion(suggestion.strip(), result.provider(), result.model(), false);
+        } catch (RuntimeException ignored) {
+            return new AiSuggestion(fallback, "local-fallback", "rules", true);
+        }
+    }
+
+    public record AiSuggestion(String suggestion, String provider, String model, boolean fallback) {}
 
     public KnowledgeFolder requireFolder(UUID id) {
         return repository.listFolders().stream()
@@ -262,6 +397,80 @@ public class KnowledgeService {
 
     public Path resolve(KnowledgeFile file) {
         return storageDir.resolve(file.storagePath()).normalize();
+    }
+
+    private String normalizeDrawingJson(String raw) {
+        String candidate = raw == null || raw.isBlank() ? EMPTY_DRAWING : raw.strip();
+        if (candidate.length() > MAX_DRAWING_JSON_LENGTH)
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "drawing is too large");
+        try {
+            JsonNode root = json.readTree(candidate);
+            if (!root.isObject() || !root.path("nodes").isArray() || !root.path("edges").isArray())
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "drawingJson must contain nodes and edges arrays");
+            return json.writeValueAsString(root);
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "drawingJson is invalid JSON");
+        }
+    }
+
+    private static String normalizeDocumentHtml(String html) {
+        String value = html == null || html.isBlank()
+                ? "<h2>开始写作</h2><p>在这里记录你的想法，也可以切换到 Draw 绘制流程图。</p>"
+                : html.strip();
+        if (value.length() > MAX_DOCUMENT_HTML_LENGTH)
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "document is too large");
+        return value;
+    }
+
+    private static String sanitizeDocumentTitle(String raw) {
+        String value = raw == null ? "" : raw.replaceAll("\\p{Cntrl}", "").strip();
+        if (value.isEmpty()) value = "无标题文档";
+        if (value.length() > MAX_NAME_LENGTH) value = value.substring(0, MAX_NAME_LENGTH);
+        return value;
+    }
+
+    private static String normalizeChangeSummary(String value) {
+        if (value == null || value.isBlank()) return "自动保存";
+        String clean = value.replaceAll("\\p{Cntrl}", "").strip();
+        return clean.length() > 120 ? clean.substring(0, 120) : clean;
+    }
+
+    private String parseAiSuggestion(String raw) {
+        if (raw == null || raw.isBlank() || "{}".equals(raw.strip())) return null;
+        try {
+            JsonNode parsed = json.readTree(raw);
+            String suggestion = parsed.path("suggestion").asText();
+            return suggestion.isBlank() ? null : suggestion;
+        } catch (Exception ignored) {
+            return raw;
+        }
+    }
+
+    private static String stripHtml(String html) {
+        if (html == null) return "";
+        return html
+                .replaceAll("(?is)<(script|style)[^>]*>.*?</\\1>", " ")
+                .replaceAll("(?s)<[^>]+>", " ")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replaceAll("\\s+", " ")
+                .strip();
+    }
+
+    private static String fallbackSuggestion(String title, String instruction, String context) {
+        String lead = context == null || context.isBlank()
+                ? "当前文档还没有正文，可以先明确目标、范围和交付结果。"
+                : "当前内容已经形成基础，可进一步补齐目标、关键步骤和验收标准。";
+        return title + "｜" + instruction + "\n"
+                + lead + "\n"
+                + "1. 背景与目标：说明要解决的问题以及预期价值。\n"
+                + "2. 实施路径：按阶段列出负责人、输入、动作和输出。\n"
+                + "3. 验收标准：给出可检查的完成条件、风险与后续行动。";
     }
 
     private static String renderOfficeToHtml(java.nio.file.Path path, String ext, String fileName) throws Exception {
