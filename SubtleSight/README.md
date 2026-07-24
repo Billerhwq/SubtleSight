@@ -4,9 +4,14 @@
 
 SubtleSight 是一个本地优先、Web-first 的单机全能情报工作台。它把来源采集、发现、文档解析、Story 聚合、信号分析、Deep Research、证据管理、Watchlist、报告导出、Agent 任务和灾备恢复连成一个可审计闭环。
 
-项目包含两套前端界面：
-- **原型版**（prototype）— 基于原生 HTML/CSS/JS 的轻量工作台，可在 `http://localhost:5173` 直接访问
-- **React SPA** — 基于 React 19 + Semi Design 的完整应用，部署于 `http://localhost:8080`（需构建）
+前端采用组合式入口：发现、知识库、财经日历等工作台页面使用原生 HTML/CSS/JavaScript，编辑与 Draw 模块使用 React 19。两部分共享同一套浅色导航和后端 API，用户从知识库进入编辑器时不会经过旧版深色 React 首页。
+
+当前主要入口：
+
+- **发现**：`http://localhost:5173/discover.html`
+- **知识库**：`http://localhost:5173/knowledge.html`
+- **编辑与 Draw**：`http://localhost:5173/knowledge-editor.html#/knowledge/editor`
+- **生产部署**：构建后由 Spring Boot 在 `http://127.0.0.1:8080` 同端口提供界面和 API
 
 ---
 
@@ -77,21 +82,21 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 
 后端启动于 `http://127.0.0.1:8080`。
 
-#### 2. 启动前端（原型版 — 推荐用于知识库功能）
+#### 2. 启动前端
 
 ```bash
-cd web-ui
-npm install
-npm run dev
+pnpm --dir web-ui install --frozen-lockfile
+pnpm --dir web-ui dev
 ```
 
 前端启动于 `http://localhost:5173`（自动代理 `/api` 到后端）。
 
 #### 3. 访问
 
-- **原型工作台**: `http://localhost:5173/discover.html`
-- **知识库**: `http://localhost:5173/knowledge.html`
-- **后端直连**: `http://127.0.0.1:8080`（React SPA，需构建）
+- **发现**：`http://localhost:5173/discover.html`
+- **知识库**：`http://localhost:5173/knowledge.html`
+- **编辑与 Draw**：`http://localhost:5173/knowledge-editor.html#/knowledge/editor`
+- **后端直连**：`http://127.0.0.1:8080`（需先完成生产构建）
 
 ### 生产模式
 
@@ -146,6 +151,28 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 - **搜索**: 带 200ms 防抖的全库搜索，显示匹配文件路径
 - **预览面板**: 右侧可拖拽宽度面板，鼠标悬停时独立滚动
 
+### 编辑与 Draw 工作流
+
+知识库的“编辑”入口加载 React 编辑器，但继续使用工作台现有的浅色侧栏、分组导航和 `Live · 本机数据` 顶栏。编辑器保留完整的文档与绘图闭环：
+
+- TipTap 富文本编辑、标题编辑和文件夹归属
+- 1.2 秒无操作后自动保存，也可手动保存
+- 使用 `expectedVersion` 做乐观并发检查，冲突时不会覆盖当前页面内容
+- 保存形成版本历史，可恢复任意旧版本并生成新版本
+- AI 辅助支持基于全文或选区生成建议，并将结果插回正文
+- Draw BETA 支持节点、连线、拖动、文本和颜色等属性编辑
+- Draw 数据与正文统一保存到 SQLite，可插入文档后继续编辑并进入版本历史
+
+编辑器相关 API：
+
+| 方法 | 端点 | 描述 |
+|---|---|---|
+| `GET/POST` | `/api/v1/knowledge/documents` | 查询或创建编辑文档 |
+| `GET/PUT/DELETE` | `/api/v1/knowledge/documents/{id}` | 获取、保存或删除文档 |
+| `GET` | `/api/v1/knowledge/documents/{id}/versions` | 获取版本历史 |
+| `POST` | `/api/v1/knowledge/documents/{id}/versions/{version}/restore` | 恢复指定版本 |
+| `POST` | `/api/v1/knowledge/documents/{id}/ai-assist` | 生成 AI 编辑建议 |
+
 ---
 
 ## 配置
@@ -168,14 +195,15 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 
 ---
 
-## 原型页面
+## 工作台页面
 
-原型版工作台使用原生 HTML 构建，无需构建即可运行：
+工作台主页面使用原生 HTML 构建，编辑入口由 React 模块承载：
 
 | 页面 | 路径 | 功能 |
 |------|------|------|
 | 发现 | `discover.html` | 信息发现与信号流 |
 | **知识库** | `knowledge.html` | 文档管理与在线预览 |
+| **编辑** | `knowledge-editor.html#/knowledge/editor` | 富文档编辑、版本历史、AI 辅助与 Draw |
 | 财经日历 | `calendar.html` | 宏观日历事件 |
 | Watchlist | `watchlist.html` | 持续跟踪管理 |
 | 报告 | `reports.html` | 报告列表与预览 |
