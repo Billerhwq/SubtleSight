@@ -22,6 +22,12 @@ public class SqliteKnowledgeRepository {
                                 long sizeBytes, String sha256, String storagePath,
                                 Instant createdAt, Instant updatedAt) {}
 
+    public record KnowledgeDocument(UUID id, UUID folderId, String title, String contentHtml,
+                                    String drawingJson, int version, Instant createdAt, Instant updatedAt) {}
+
+    public record KnowledgeDocumentVersion(UUID documentId, int version, String title, String contentHtml,
+                                           String drawingJson, String changeSummary, Instant createdAt) {}
+
     private static final RowMapper<KnowledgeFolder> FOLDER_MAPPER = (rs, n) -> new KnowledgeFolder(
             UUID.fromString(rs.getString("id")),
             rs.getString("parent_id") == null ? null : UUID.fromString(rs.getString("parent_id")),
@@ -40,6 +46,25 @@ public class SqliteKnowledgeRepository {
             rs.getString("storage_path"),
             Instant.parse(rs.getString("created_at")),
             Instant.parse(rs.getString("updated_at")));
+
+    private static final RowMapper<KnowledgeDocument> DOCUMENT_MAPPER = (rs, n) -> new KnowledgeDocument(
+            UUID.fromString(rs.getString("id")),
+            rs.getString("folder_id") == null ? null : UUID.fromString(rs.getString("folder_id")),
+            rs.getString("title"),
+            rs.getString("content_html"),
+            rs.getString("drawing_json"),
+            rs.getInt("version"),
+            Instant.parse(rs.getString("created_at")),
+            Instant.parse(rs.getString("updated_at")));
+
+    private static final RowMapper<KnowledgeDocumentVersion> DOCUMENT_VERSION_MAPPER = (rs, n) -> new KnowledgeDocumentVersion(
+            UUID.fromString(rs.getString("document_id")),
+            rs.getInt("version"),
+            rs.getString("title"),
+            rs.getString("content_html"),
+            rs.getString("drawing_json"),
+            rs.getString("change_summary"),
+            Instant.parse(rs.getString("created_at")));
 
     public List<KnowledgeFolder> listFolders() {
         return jdbc.query("SELECT * FROM knowledge_folders ORDER BY name", FOLDER_MAPPER);
@@ -88,6 +113,81 @@ public class SqliteKnowledgeRepository {
 
     public void deleteFile(UUID id) {
         jdbc.update("DELETE FROM knowledge_files WHERE id=?", id.toString());
+    }
+
+    public List<KnowledgeDocument> listDocuments() {
+        return jdbc.query("SELECT * FROM knowledge_documents ORDER BY updated_at DESC", DOCUMENT_MAPPER);
+    }
+
+    public List<KnowledgeDocument> listDocuments(UUID folderId) {
+        if (folderId == null)
+            return jdbc.query("SELECT * FROM knowledge_documents WHERE folder_id IS NULL ORDER BY updated_at DESC", DOCUMENT_MAPPER);
+        return jdbc.query("SELECT * FROM knowledge_documents WHERE folder_id=? ORDER BY updated_at DESC",
+                DOCUMENT_MAPPER, folderId.toString());
+    }
+
+    public Optional<KnowledgeDocument> findDocument(UUID id) {
+        List<KnowledgeDocument> rows = jdbc.query(
+                "SELECT * FROM knowledge_documents WHERE id=?", DOCUMENT_MAPPER, id.toString());
+        return rows.stream().findFirst();
+    }
+
+    public void insertDocument(KnowledgeDocument document) {
+        jdbc.update("""
+                INSERT INTO knowledge_documents(
+                  id,folder_id,title,content_html,drawing_json,version,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                document.id().toString(),
+                document.folderId() == null ? null : document.folderId().toString(),
+                document.title(), document.contentHtml(), document.drawingJson(), document.version(),
+                document.createdAt().toString(), document.updatedAt().toString());
+    }
+
+    /**
+     * Updates a document only when the supplied version is current.
+     * Returning zero lets the service expose a deterministic HTTP 409 instead of losing edits.
+     */
+    public int updateDocument(UUID id, UUID folderId, String title, String contentHtml, String drawingJson,
+                              int expectedVersion, Instant updatedAt) {
+        return jdbc.update("""
+                UPDATE knowledge_documents
+                SET folder_id=?, title=?, content_html=?, drawing_json=?,
+                    version=version+1, updated_at=?
+                WHERE id=? AND version=?
+                """,
+                folderId == null ? null : folderId.toString(),
+                title, contentHtml, drawingJson, updatedAt.toString(), id.toString(), expectedVersion);
+    }
+
+    public void insertDocumentVersion(KnowledgeDocumentVersion version) {
+        jdbc.update("""
+                INSERT INTO knowledge_document_versions(
+                  document_id,version,title,content_html,drawing_json,change_summary,created_at
+                ) VALUES(?,?,?,?,?,?,?)
+                """,
+                version.documentId().toString(), version.version(), version.title(), version.contentHtml(),
+                version.drawingJson(), version.changeSummary(), version.createdAt().toString());
+    }
+
+    public List<KnowledgeDocumentVersion> listDocumentVersions(UUID documentId) {
+        return jdbc.query("""
+                SELECT * FROM knowledge_document_versions
+                WHERE document_id=?
+                ORDER BY version DESC
+                """, DOCUMENT_VERSION_MAPPER, documentId.toString());
+    }
+
+    public Optional<KnowledgeDocumentVersion> findDocumentVersion(UUID documentId, int version) {
+        List<KnowledgeDocumentVersion> rows = jdbc.query("""
+                SELECT * FROM knowledge_document_versions
+                WHERE document_id=? AND version=?
+                """, DOCUMENT_VERSION_MAPPER, documentId.toString(), version);
+        return rows.stream().findFirst();
+    }
+
+    public void deleteDocument(UUID id) {
+        jdbc.update("DELETE FROM knowledge_documents WHERE id=?", id.toString());
     }
 
     /** 删除文件夹记录 */

@@ -48,12 +48,12 @@ describe('prototype static shell', () => {
         expect(app).toContain('<video class="inline-video" controls preload="metadata"');
         expect(app).toContain('已下载到本机 blob，可直接播放');
     });
-    it('does not expose knowledge search or deep research agent surfaces', () => {
+    it('exposes the knowledge editor while keeping deep research agent surfaces disabled', () => {
         const app = readFileSync(resolve(root, 'public/app.js'), 'utf8');
         expect(app).not.toContain("['research', 'research.html'");
-        expect(app).not.toContain("['knowledge', 'knowledge.html'");
+        expect(app).toContain("['knowledge', 'knowledge.html'");
+        expect(app).toContain("['editor', 'knowledge-editor.html#/knowledge/editor'");
         expect(app).not.toContain('href="research.html');
-        expect(app).not.toContain('href="knowledge.html');
         expect(app).not.toContain('href="story.html');
         expect(app).not.toContain('id="agentButton"');
         expect(app).not.toContain('id="globalSearch"');

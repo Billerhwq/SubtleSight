@@ -40,6 +40,9 @@ export const get = <T>(path: string): Promise<T> => api<T>(path);
 export const post = <T>(path: string, body?: unknown): Promise<T> =>
   api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) } as RequestInit);
 
+export const put = <T>(path: string, body?: unknown): Promise<T> =>
+  api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) } as RequestInit);
+
 export const del = <T>(path: string): Promise<T> => api<T>(path, { method: 'DELETE' } as RequestInit);
 
 /** 知识库文件上传：使用 XHR 以获取实时进度，配合多文件并行提升大文件上传体验 */

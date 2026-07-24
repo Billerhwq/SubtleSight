@@ -4,6 +4,7 @@ const navGroups = [
   { label: '工作区', items: [
     ['discover', 'discover.html', 'radar', '发现'],
     ['knowledge', 'knowledge.html', 'folder-open', '知识库'],
+    ['editor', 'knowledge-editor.html#/knowledge/editor', 'file-pen-line', '编辑'],
     ['calendar', 'calendar.html', 'calendar-days', '财经日历'],
     ['watchlist', 'watchlist.html', 'eye', 'Watchlist', '4']
   ]},
