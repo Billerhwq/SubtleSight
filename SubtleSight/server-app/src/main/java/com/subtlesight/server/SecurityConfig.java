@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -25,7 +26,8 @@ public class SecurityConfig {
         CookieCsrfTokenRepository csrf = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrf.setCookiePath("/");
         http.authorizeHttpRequests(auth->auth.anyRequest().permitAll())
-                .csrf(c->c.csrfTokenRepository(csrf))
+                .csrf(c->c.csrfTokenRepository(csrf)
+                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()))
                 .addFilterBefore(new OriginValidationFilter(origins),SecurityContextHolderFilter.class)
                 .headers(headers->headers.frameOptions(fo->fo.sameOrigin()))
                 .formLogin(form->form.disable())

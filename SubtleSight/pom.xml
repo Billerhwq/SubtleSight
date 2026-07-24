@@ -34,6 +34,7 @@
     <module>signal-engine</module>
     <module>research-engine</module>
     <module>evidence-engine</module>
+    <module>qa-engine</module>
     <module>watchlist-engine</module>
     <module>report-engine</module>
     <module>agent-engine</module>

@@ -19,6 +19,7 @@
     <dependency><groupId>com.subtlesight</groupId><artifactId>signal-engine</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.subtlesight</groupId><artifactId>research-engine</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.subtlesight</groupId><artifactId>evidence-engine</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.subtlesight</groupId><artifactId>qa-engine</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.subtlesight</groupId><artifactId>watchlist-engine</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.subtlesight</groupId><artifactId>report-engine</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.subtlesight</groupId><artifactId>agent-engine</artifactId><version>${project.version}</version></dependency>

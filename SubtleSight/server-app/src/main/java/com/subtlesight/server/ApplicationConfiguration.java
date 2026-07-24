@@ -2,6 +2,7 @@ package com.subtlesight.server;
 
 import com.subtlesight.application.SubtleSightFacade;
 import com.subtlesight.application.Ports.*;
+import com.subtlesight.application.TraceableQaPorts.*;
 import com.subtlesight.calendar.*;
 import com.subtlesight.calendar.connectors.*;
 import com.subtlesight.calendar.storage.sqlite.SqliteCalendarRepository;
@@ -17,11 +18,17 @@ import com.subtlesight.provider.search.JsonWebSearchProvider;
 import com.subtlesight.report.ReportService;
 import com.subtlesight.research.DeepResearchService;
 import com.subtlesight.search.LuceneHybridIndex;
+import com.subtlesight.search.LuceneLexicalUnitIndex;
+import com.subtlesight.search.LuceneSemanticUnitIndex;
+import com.subtlesight.search.LocalFeatureEmbeddingProvider;
+import com.subtlesight.qa.HybridKnowledgeRetriever;
+import com.subtlesight.qa.TraceableQaService;
 import com.subtlesight.signal.SignalEngine;
 import com.subtlesight.storage.blob.ContentAddressedBlobStore;
 import com.subtlesight.storage.sqlite.SqliteDataSourceFactory;
 import com.subtlesight.storage.sqlite.SqliteIntelligenceRepository;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository;
+import com.subtlesight.storage.sqlite.SqliteTraceableQaRepository;
 import com.subtlesight.story.EntityTopicExtractor;
 import com.subtlesight.story.StoryClusterEngine;
 import com.subtlesight.watchlist.WatchlistService;
@@ -43,14 +50,24 @@ import java.util.Optional;
 @Configuration
 public class ApplicationConfiguration {
     @Bean Clock clock(){return Clock.systemUTC();}
-    @Bean Path dataDirectory(@Value("${subtlesight.data-dir}")String value){try{Path path=Path.of(value).toAbsolutePath().normalize();for(String sub:List.of("blobs","lucene","reports","backups","logs","knowledge"))Files.createDirectories(path.resolve(sub));return path;}catch(Exception e){throw new IllegalStateException("cannot initialize data directory",e);}}
+    @Bean Path dataDirectory(@Value("${subtlesight.data-dir}")String value){try{Path path=Path.of(value).toAbsolutePath().normalize();for(String sub:List.of("blobs","lucene","lucene-knowledge-lexical","lucene-knowledge-semantic","reports","backups","logs","knowledge"))Files.createDirectories(path.resolve(sub));return path;}catch(Exception e){throw new IllegalStateException("cannot initialize data directory",e);}}
     @Bean(destroyMethod="close")DataDirectoryLock dataDirectoryLock(Path dataDirectory){return new DataDirectoryLock(dataDirectory);}
     @Bean DataSource dataSource(Path dataDirectory){return SqliteDataSourceFactory.create(dataDirectory.resolve("subtlesight.db"));}
     @Bean IntelligenceRepository repository(DataSource dataSource,ObjectMapper json){return new SqliteIntelligenceRepository(dataSource,json);}
     @Bean CalendarRepository calendarRepository(DataSource dataSource,ObjectMapper json){return new SqliteCalendarRepository(dataSource,json);}
     @Bean BlobStore blobStore(Path dataDirectory){return new ContentAddressedBlobStore(dataDirectory.resolve("blobs"));}
     @Bean SqliteKnowledgeRepository knowledgeRepository(DataSource dataSource){return new SqliteKnowledgeRepository(dataSource);}
-    @Bean KnowledgeService knowledgeService(SqliteKnowledgeRepository knowledgeRepository,Path dataDirectory,Clock clock,AiProvider ai,ObjectMapper json){return new KnowledgeService(knowledgeRepository,dataDirectory.resolve("knowledge"),clock,ai,json);}
+    @Bean Repository traceableQaRepository(DataSource dataSource,ObjectMapper json,Clock clock){return new SqliteTraceableQaRepository(dataSource,json,clock);}
+    @Bean(destroyMethod="close") LexicalUnitIndex lexicalUnitIndex(Path dataDirectory){return new LuceneLexicalUnitIndex(dataDirectory.resolve("lucene-knowledge-lexical"));}
+    @Bean(destroyMethod="close") SemanticUnitIndex semanticUnitIndex(Path dataDirectory){return new LuceneSemanticUnitIndex(dataDirectory.resolve("lucene-knowledge-semantic"));}
+    @Bean EmbeddingProvider embeddingProvider(){return new LocalFeatureEmbeddingProvider();}
+    @Bean HybridKnowledgeRetriever hybridKnowledgeRetriever(Repository repository,LexicalUnitIndex lexical,SemanticUnitIndex semantic,EmbeddingProvider embeddings){return new HybridKnowledgeRetriever(repository,lexical,semantic,embeddings);}
+    @Bean TraceableQaService traceableQaService(Repository repository,HybridKnowledgeRetriever retriever,AiProvider ai,ObjectMapper json,Clock clock){return new TraceableQaService(repository,retriever,ai,json,clock);}
+    @Bean KnowledgeUnitIndexingService knowledgeUnitIndexingService(SqliteKnowledgeRepository knowledge,Repository repository,LexicalUnitIndex lexical,SemanticUnitIndex semantic,EmbeddingProvider embeddings,DocumentProcessor processor,ObjectMapper json,Path dataDirectory,Clock clock){return new KnowledgeUnitIndexingService(knowledge,repository,lexical,semantic,embeddings,processor,json,dataDirectory.resolve("knowledge"),clock);}
+    @Bean KnowledgeIndexJobs knowledgeIndexJobs(DurableJobQueue jobs,Repository repository,ObjectMapper json){return new KnowledgeIndexJobs(jobs,repository,json);}
+    @Bean TraceableQaJobs traceableQaJobs(TraceableQaService qa,DurableJobQueue jobs,ObjectMapper json){return new TraceableQaJobs(qa,jobs,json);}
+    @Bean KnowledgeService knowledgeService(SqliteKnowledgeRepository knowledgeRepository,Path dataDirectory,Clock clock,AiProvider ai,ObjectMapper json,KnowledgeIndexJobs indexJobs){return new KnowledgeService(knowledgeRepository,dataDirectory.resolve("knowledge"),clock,ai,json,indexJobs);}
+    @Bean TraceableQaPersistenceService traceableQaPersistenceService(TraceableQaService qa,KnowledgeService knowledge,ObjectMapper json,Repository repository){return new TraceableQaPersistenceService(qa,knowledge,json,repository);}
     @Bean(destroyMethod="close")SearchIndex searchIndex(Path dataDirectory){return new LuceneHybridIndex(dataDirectory.resolve("lucene"));}
     @Bean SubtleSightFacade facade(IntelligenceRepository repository,BlobStore blobStore,SearchIndex search,Clock clock){return new SubtleSightFacade(repository,blobStore,search,clock);}
     @Bean SafeHttpClient safeHttpClient(@Value("${subtlesight.connectors.min-delay-ms:1500}")long minDelayMs){return new SafeHttpClient(Duration.ofSeconds(30),5,50*1024*1024,Duration.ofMillis(Math.max(0,minDelayMs)));}
@@ -96,6 +113,12 @@ public class ApplicationConfiguration {
     @Bean ReportService reportService(IntelligenceRepository repository,ObjectMapper json,Clock clock){return new ReportService(repository,json,clock);}
     @Bean DeepResearchService researchService(IntelligenceRepository repository,@org.springframework.beans.factory.annotation.Qualifier("searchProviders") List<WebSearchProvider> providers,AiProvider ai,Clock clock){return new DeepResearchService(repository,providers,ai,(question,hits,max)->repository.listDocumentVersions(Math.min(Math.max(max,0),100)),clock);}
     @Bean DurableJobQueue jobQueue(DataSource dataSource,Clock clock){return new DurableJobQueue(dataSource,clock,Duration.ofSeconds(30),new RetryPolicy(Duration.ofSeconds(2),Duration.ofMinutes(5),42));}
-    @Bean(destroyMethod="close")DurableJobRunner jobRunner(DurableJobQueue queue,DeepResearchService research,ObjectMapper json){DurableJobRunner runner=new DurableJobRunner(queue);runner.register("RESEARCH",2,(job,context)->{context.heartbeat();research.execute(java.util.UUID.fromString(json.readTree(job.payloadJson()).path("researchId").asText()));});return runner;}
+    @Bean(destroyMethod="close")DurableJobRunner jobRunner(DurableJobQueue queue,DeepResearchService research,KnowledgeUnitIndexingService indexing,TraceableQaService qa,ObjectMapper json){
+        DurableJobRunner runner=new DurableJobRunner(queue);
+        runner.register("RESEARCH",2,(job,context)->{context.heartbeat();research.execute(java.util.UUID.fromString(json.readTree(job.payloadJson()).path("researchId").asText()));});
+        runner.register(KnowledgeIndexJobs.TYPE,2,(job,context)->{context.heartbeat();var payload=json.readTree(job.payloadJson());var id=java.util.UUID.fromString(payload.path("resourceId").asText());if("FILE".equals(payload.path("resourceType").asText()))indexing.indexFile(id,payload.path("version").asText());else indexing.indexDocument(id,payload.path("version").asInt());});
+        runner.register(TraceableQaJobs.TYPE,2,(job,context)->{context.heartbeat();var id=java.util.UUID.fromString(json.readTree(job.payloadJson()).path("answerId").asText());try{qa.execute(id);}catch(Exception failure){qa.fail(id,failure.getClass().getSimpleName());throw failure;}});
+        return runner;
+    }
     @Bean BackupService backupService(DataSource dataSource,Path dataDirectory,ObjectMapper json,Clock clock){return new BackupService(dataSource,dataDirectory,json,clock);}
 }

@@ -46,14 +46,16 @@ public class KnowledgeService {
     private final Clock clock;
     private final AiProvider ai;
     private final ObjectMapper json;
+    private final KnowledgeIndexJobs indexJobs;
 
     public KnowledgeService(SqliteKnowledgeRepository repository, Path storageDir, Clock clock,
-                            AiProvider ai, ObjectMapper json) {
+                            AiProvider ai, ObjectMapper json, KnowledgeIndexJobs indexJobs) {
         this.repository = repository;
         this.storageDir = storageDir;
         this.clock = clock;
         this.ai = ai;
         this.json = json;
+        this.indexJobs = indexJobs;
         try {
             Files.createDirectories(storageDir);
         } catch (IOException e) {
@@ -116,6 +118,7 @@ public class KnowledgeService {
                 file.getContentType(), size, HexFormat.of().formatHex(digest.digest()),
                 target.getFileName().toString(), now, now);
         repository.insertFile(entry);
+        indexJobs.submit(entry);
         return entry;
     }
 
@@ -173,6 +176,7 @@ public class KnowledgeService {
         repository.insertDocumentVersion(new KnowledgeDocumentVersion(
                 document.id(), document.version(), document.title(), document.contentHtml(),
                 document.drawingJson(), "创建文档", now));
+        indexJobs.submit(document);
         return document;
     }
 
@@ -202,6 +206,7 @@ public class KnowledgeService {
         repository.insertDocumentVersion(new KnowledgeDocumentVersion(
                 saved.id(), saved.version(), saved.title(), saved.contentHtml(), saved.drawingJson(),
                 normalizeChangeSummary(changeSummary), now));
+        indexJobs.submit(saved);
         return saved;
     }
 
