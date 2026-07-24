@@ -55,11 +55,11 @@ describe('prototype static shell', () => {
     expect(app).toContain('已下载到本机 blob，可直接播放');
   });
 
-  it('exposes the knowledge editor while keeping deep research agent surfaces disabled', () => {
+  it('keeps the knowledge workspace entry while hiding the legacy editor shell', () => {
     const app = readFileSync(resolve(root, 'public/app.js'), 'utf8');
     expect(app).not.toContain("['research', 'research.html'");
     expect(app).toContain("['knowledge', 'knowledge.html'");
-    expect(app).toContain("['editor', 'knowledge-editor.html#/knowledge/editor'");
+    expect(app).not.toContain("['editor', 'knowledge-editor.html#/knowledge/editor'");
     expect(app).not.toContain('href="research.html');
     expect(app).not.toContain('href="story.html');
     expect(app).not.toContain('id="agentButton"');
