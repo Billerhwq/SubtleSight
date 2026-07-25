@@ -83,6 +83,10 @@ public class KnowledgeService {
         return repository.listFiles(folderId);
     }
 
+    public List<KnowledgeFile> allFiles() {
+        return repository.listAllFiles();
+    }
+
     public List<KnowledgeFile> store(UUID folderId, List<MultipartFile> files) throws IOException {
         if (folderId != null && !repository.folderExists(folderId))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "folder not found");

@@ -27,7 +27,6 @@ const StoryPage = lazy<React.ComponentType<object>>(() => import('./pages/StoryP
 const ResearchPage = lazy<React.ComponentType<object>>(() => import('./pages/ResearchPage').then(m => ({ default: m.ResearchPage }) as unknown as { default: React.ComponentType }));
 const WatchlistPage = lazy<React.ComponentType<object>>(() => import('./pages/WatchlistPage').then(m => ({ default: m.WatchlistPage }) as unknown as { default: React.ComponentType }));
 const KnowledgePage = lazy<React.ComponentType<object>>(() => import('./pages/KnowledgePage').then(m => ({ default: m.KnowledgePage }) as unknown as { default: React.ComponentType }));
-const KnowledgeEditorPage = lazy<React.ComponentType<object>>(() => import('./pages/KnowledgeEditorPage').then(m => ({ default: m.KnowledgeEditorPage }) as unknown as { default: React.ComponentType }));
 const ReportsPage = lazy<React.ComponentType<object>>(() => import('./pages/ReportsPage').then(m => ({ default: m.ReportsPage }) as unknown as { default: React.ComponentType }));
 const AdminPage = lazy<React.ComponentType<object>>(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage }) as unknown as { default: React.ComponentType }));
 const AgentDrawer = lazy<React.ComponentType<object>>(() => import('./components/AgentDrawer').then(m => ({ default: m.AgentDrawer }) as unknown as { default: React.ComponentType }));
@@ -47,8 +46,7 @@ const shellNavGroups: Array<{ label: string; items: ShellNavItem[] }> = [
     label: '工作区',
     items: [
       { key: '/discover', href: 'discover.html', label: '发现', icon: <IconHomeStroked /> },
-      { key: '/knowledge', href: 'knowledge.html', label: '知识库', icon: <IconFolderStroked /> },
-      { key: '/knowledge/editor', href: 'knowledge-editor.html#/knowledge/editor', label: '编辑', icon: <IconEditStroked /> },
+      { key: '/knowledge', href: 'knowledge-editor.html#/knowledge', label: '知识库', icon: <IconFolderStroked /> },
       { key: '/calendar', href: 'calendar.html', label: '财经日历', icon: <IconCalendarStroked /> },
       { key: '/watchlists', href: 'watchlist.html', label: 'Watchlist', icon: <IconEyeOpenedStroked />, count: '4' },
     ],
@@ -76,9 +74,11 @@ export default function App(): ReactNode {
 
 function AuthenticatedApp(): ReactNode {
   const query = useQuery({ queryKey: ['auth'], queryFn: () => get<Auth>('/auth/status') });
-  if (query.isLoading) return <div className="center-screen"><Spin size="large" tip="正在唤醒 SubtleSight…" /></div>;
-  const authUser = (query.data as Auth | undefined)?.user ?? 'local';
-  return <Workspace user={authUser} apiConnected={!query.isError} />;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const q = query as any;
+  if (q.isLoading) return <div className="center-screen"><Spin size="large" tip="正在唤醒 SubtleSight…" /></div>;
+  const authUser = (q.data as Auth | undefined)?.user ?? 'local';
+  return <Workspace user={authUser} apiConnected={!q.isError} />;
 }
 
 function Workspace(props: { user: string; apiConnected: boolean }): ReactNode {
@@ -89,16 +89,15 @@ function Workspace(props: { user: string; apiConnected: boolean }): ReactNode {
 
   useEffect(() => {
     const events = new EventSource('/api/v1/events');
+    const refreshAll = () => (client as any).invalidateQueries();
     for (const name of ['story.updated', 'research.requested', 'research.completed', 'discovery.completed']) {
-      events.addEventListener(name, () => client.invalidateQueries());
+      events.addEventListener(name, refreshAll);
     }
     events.onerror = () => {};
     return () => events.close();
   }, [client]);
 
-  const selected = location.pathname.startsWith('/knowledge/editor')
-    ? '/knowledge/editor'
-    : '/' + location.pathname.split('/')[1];
+  const selected = '/' + location.pathname.split('/')[1];
   const avatarText = user === 'local' ? 'SS' : user.slice(0, 2).toUpperCase();
 
   return (
@@ -157,7 +156,6 @@ function Workspace(props: { user: string; apiConnected: boolean }): ReactNode {
             <Route path="/research" element={<ResearchPage />} />
             <Route path="/research/:id" element={<ResearchPage />} />
             <Route path="/watchlists" element={<WatchlistPage />} />
-            <Route path="/knowledge/editor" element={<KnowledgeEditorPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/admin" element={<AdminPage />} />

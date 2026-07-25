@@ -45,11 +45,12 @@ export const put = <T>(path: string, body?: unknown): Promise<T> =>
 
 export const del = <T>(path: string): Promise<T> => api<T>(path, { method: 'DELETE' } as RequestInit);
 
-/** 知识库文件上传：使用 XHR 以获取实时进度，配合多文件并行提升大文件上传体验 */
-export function uploadKnowledgeFile(
+/** 知识库文件批量上传：所有文件在一个 XHR 请求中提交，实时进度 */
+export function uploadKnowledgeFiles(
   folderId: string | null,
-  file: File,
+  files: File[],
   onProgress: (percent: number) => void,
+  onFileProgress?: (index: number, percent: number) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -71,7 +72,18 @@ export function uploadKnowledgeFile(
     };
     xhr.onerror = () => reject(new ApiError(0, '网络错误，上传失败'));
     const body = new FormData();
-    body.append('files', file);
+    for (const file of files) {
+      body.append('files', file);
+    }
     xhr.send(body as XMLHttpRequestBodyInit);
   });
+}
+
+/** 单文件上传（兼容旧调用） */
+export function uploadKnowledgeFile(
+  folderId: string | null,
+  file: File,
+  onProgress: (percent: number) => void,
+): Promise<void> {
+  return uploadKnowledgeFiles(folderId, [file], onProgress);
 }

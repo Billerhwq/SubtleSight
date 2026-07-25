@@ -4,13 +4,12 @@
 
 SubtleSight 是一个本地优先、Web-first 的单机全能情报工作台。它把来源采集、发现、文档解析、Story 聚合、信号分析、Deep Research、证据管理、Watchlist、报告导出、Agent 任务和灾备恢复连成一个可审计闭环。
 
-前端采用组合式入口：发现、知识库、财经日历等工作台页面使用原生 HTML/CSS/JavaScript，编辑与 Draw 模块使用 React 19。两部分共享同一套浅色导航和后端 API，用户从知识库进入编辑器时不会经过旧版深色 React 首页。
+前端采用组合式入口：发现、财经日历等工作台页面使用原生 HTML/CSS/JavaScript，知识库模块（含文件管理、文档编辑与 Draw 绘图）使用 React 19，两部分共享同一套浅色导航和后端 API。编辑器已深度整合为知识库的子模块，用户可在知识库中直接新建文档、编辑文本或切换 Draw 画板。
 
 当前主要入口：
 
 - **发现**：`http://localhost:5173/discover.html`
-- **知识库**：`http://localhost:5173/knowledge.html`
-- **编辑与 Draw**：`http://localhost:5173/knowledge-editor.html#/knowledge/editor`
+- **知识库（文件管理 + 文档编辑 + Draw）**：`http://localhost:5173/knowledge-editor.html#/knowledge`
 - **生产部署**：构建后由 Spring Boot 在 `http://127.0.0.1:8080` 同端口提供界面和 API
 
 ---
@@ -94,8 +93,7 @@ pnpm --dir web-ui dev
 #### 3. 访问
 
 - **发现**：`http://localhost:5173/discover.html`
-- **知识库**：`http://localhost:5173/knowledge.html`
-- **编辑与 Draw**：`http://localhost:5173/knowledge-editor.html#/knowledge/editor`
+- **知识库（文件管理 + 文档编辑 + Draw）**：`http://localhost:5173/knowledge-editor.html#/knowledge`
 - **后端直连**：`http://127.0.0.1:8080`（需先完成生产构建）
 
 ### 生产模式
@@ -111,7 +109,7 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 
 ## 知识库功能
 
-知识库是 SubtleSight 的文档管理中心，支持文件夹/文件的增删改查、上传下载、全文搜索和在线预览。
+知识库是 SubtleSight 的文档管理中心，集文件管理、富文本编辑与 Draw 绘图于一体。支持文件夹/文件的增删改查、批量上传、全文搜索、在线预览，以及知识文档的创建、编辑、版本控制和 AI 辅助。
 
 ### API 端点
 
@@ -121,22 +119,29 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 | `POST` | `/api/v1/knowledge/folders` | 创建文件夹 |
 | `DELETE` | `/api/v1/knowledge/folders/{id}` | 递归删除文件夹（含子文件夹和文件） |
 | `GET` | `/api/v1/knowledge/files` | 获取文件列表（可选 `?folderId=`） |
-| `POST` | `/api/v1/knowledge/upload` | 上传文件（multipart） |
+| `POST` | `/api/v1/knowledge/upload` | 批量上传文件（multipart，多文件一次请求） |
 | `POST` | `/api/v1/knowledge/files/{id}/rename` | 重命名文件 |
 | `POST` | `/api/v1/knowledge/files/{id}/move` | 移动文件 |
 | `DELETE` | `/api/v1/knowledge/files/{id}` | 删除文件 |
 | `GET` | `/api/v1/knowledge/files/{id}/download` | 下载文件（attachment） |
 | `GET` | `/api/v1/knowledge/files/{id}/view` | 内联查看文件（iframe 嵌入） |
 | `GET` | `/api/v1/knowledge/files/{id}/preview` | 预览文件（含文本提取/图片 base64/Office HTML） |
+| `GET` | `/api/v1/knowledge/documents` | 查询所有文档 |
+| `POST` | `/api/v1/knowledge/documents` | 创建文档 |
+| `GET/PUT/DELETE` | `/api/v1/knowledge/documents/{id}` | 获取、保存或删除文档 |
+| `GET` | `/api/v1/knowledge/documents/{id}/versions` | 获取版本历史 |
+| `POST` | `/api/v1/knowledge/documents/{id}/versions/{version}/restore` | 恢复指定版本 |
+| `POST` | `/api/v1/knowledge/documents/{id}/ai-assist` | 生成 AI 编辑建议 |
 | `GET` | `/api/v1/knowledge/search?q=` | 全库搜索（模糊匹配文件夹和文件名） |
 
 ### 预览支持
 
 | 文件类型 | 预览方式 | 说明 |
 |---------|---------|------|
-| 文本（.txt/.md/.js/.py/.json 等 50+ 种） | Syntax-highlighted 代码块 | 自动检测编码（UTF-8/GBK/GB18030） |
+| 文本（.txt/.md/.js/.py/.json 等 50+ 种） | 代码块 | 自动检测编码（UTF-8/GBK/GB18030） |
 | 图片（.png/.jpg/.gif/.webp/.svg 等 12 种） | Base64 内嵌渲染 | SVG 作为文本渲染 |
 | PDF | 浏览器 iframe 内联查看 | `Content-Disposition: inline` |
+| 知识文档（.draw） | 富文本 HTML 渲染 | 带纸张卡片样式、代码块、引用等排版 |
 | Word（.docx） | POI 解析为富文本 HTML | 保留段落结构 |
 | Excel（.xlsx） | POI 解析为 HTML 表格 | 首行加粗，Sheet 名称 |
 | PowerPoint（.pptx） | POI 解析为幻灯片卡片 | 缩略列表 |
@@ -145,33 +150,24 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 
 ### 前端交互
 
-- **文件夹管理**: 新建（树面板 + 按钮）、重命名、移动、递归删除
-- **文件操作**: 上传（拖拽/选择，多文件并行）、下载、右键菜单
+- **文件夹管理**: 新建（树面板 + 按钮 / 右击菜单）、重命名、移动、递归删除
+- **文件操作**: 批量上传（拖拽/选择，多文件一次请求，进度条）、下载
+- **文件预览**: 右侧可拖拽宽度面板（280px–800px），支持文本代码块、图片 Base64 渲染、PDF iframe 嵌入、文档富文本预览
+- **文档管理**: 支持移动、重命名、删除操作；同名文件与文档在文件网格和知识树中统一展示
 - **视图模式**: 网格视图 / 列表视图，名称升序/降序排序
-- **搜索**: 带 200ms 防抖的全库搜索，显示匹配文件路径
-- **预览面板**: 右侧可拖拽宽度面板，鼠标悬停时独立滚动
+- **搜索**: 防抖全库搜索，过滤当前文件夹下的文件与文档
+- **知识树**: 文件夹、上传文件、知识文档在树中分层展示，右击支持新建文件夹/文档
 
 ### 编辑与 Draw 工作流
 
-知识库的“编辑”入口加载 React 编辑器，但继续使用工作台现有的浅色侧栏、分组导航和 `Live · 本机数据` 顶栏。编辑器保留完整的文档与绘图闭环：
+编辑器已深度集成到知识库模块中，在浏览模式下双击文档卡片（或右击选择「编辑」）即可切换至编辑模式，无需独立页面跳转。编辑器保留完整的文档与绘图闭环：
 
-- TipTap 富文本编辑、标题编辑和文件夹归属
-- 1.2 秒无操作后自动保存，也可手动保存
-- 使用 `expectedVersion` 做乐观并发检查，冲突时不会覆盖当前页面内容
-- 保存形成版本历史，可恢复任意旧版本并生成新版本
-- AI 辅助支持基于全文或选区生成建议，并将结果插回正文
-- Draw BETA 支持节点、连线、拖动、文本和颜色等属性编辑
-- Draw 数据与正文统一保存到 SQLite，可插入文档后继续编辑并进入版本历史
-
-编辑器相关 API：
-
-| 方法 | 端点 | 描述 |
-|---|---|---|
-| `GET/POST` | `/api/v1/knowledge/documents` | 查询或创建编辑文档 |
-| `GET/PUT/DELETE` | `/api/v1/knowledge/documents/{id}` | 获取、保存或删除文档 |
-| `GET` | `/api/v1/knowledge/documents/{id}/versions` | 获取版本历史 |
-| `POST` | `/api/v1/knowledge/documents/{id}/versions/{version}/restore` | 恢复指定版本 |
-| `POST` | `/api/v1/knowledge/documents/{id}/ai-assist` | 生成 AI 编辑建议 |
+- **TipTap 富文本编辑**：标题编辑、文件夹归属、自动保存/手动保存可选
+- **乐观并发控制**：使用 `expectedVersion` 做版本冲突检测，冲突时不会覆盖当前内容
+- **版本历史**：保存形成版本历史，可恢复任意旧版本并生成新版本
+- **AI 辅助**：基于全文或选区生成建议，一键插入正文
+- **Draw BETA**：支持节点（矩形/菱形/便签/强调节点）、连线、拖动、颜色与文字属性编辑，缩放控制 60%–140%
+- **图文联动**：Draw 数据与正文统一保存到 SQLite 文档的 `drawingJson` 字段中，可插入文档后继续编辑并进入版本历史
 
 ---
 
@@ -197,13 +193,12 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 
 ## 工作台页面
 
-工作台主页面使用原生 HTML 构建，编辑入口由 React 模块承载：
+工作台主页面使用原生 HTML 构建，知识库模块（含文件管理、文档编辑与 Draw）由 React 19 承载：
 
 | 页面 | 路径 | 功能 |
 |------|------|------|
 | 发现 | `discover.html` | 信息发现与信号流 |
-| **知识库** | `knowledge.html` | 文档管理与在线预览 |
-| **编辑** | `knowledge-editor.html#/knowledge/editor` | 富文档编辑、版本历史、AI 辅助与 Draw |
+| **知识库（文件+文档+Draw）** | `knowledge-editor.html#/knowledge` | 文件管理、文档编辑、版本历史、AI 辅助与 Draw 绘图 |
 | 财经日历 | `calendar.html` | 宏观日历事件 |
 | Watchlist | `watchlist.html` | 持续跟踪管理 |
 | 报告 | `reports.html` | 报告列表与预览 |
@@ -277,16 +272,20 @@ SubtleSight/
 │       ├── ApiController.java
 │       └── ...
 ├── web-ui/                    # 前端应用
-│   ├── public/                # 原型 HTML 页面
-│   │   ├── knowledge.html
+│   ├── public/                # 原生 HTML 页面
 │   │   ├── discover.html
-│   │   ├── app.js             # 原型版 JS 逻辑
-│   │   └── styles.css         # 原型版样式
-│   └── src/                   # React SPA
-│       ├── App.tsx
-│       ├── api/client.ts
-│       ├── pages/KnowledgePage.tsx
-│       └── ...
+│   │   ├── app.js             # 原生 JS 逻辑
+│   │   └── styles.css         # 原生样式
+│   ├── src/                   # React SPA（知识库 + 编辑 + Draw）
+│   │   ├── App.tsx            # 路由与导航 Shell
+│   │   ├── api/client.ts
+│   │   ├── pages/
+│   │   │   └── KnowledgePage.tsx  # 知识库（文件管理 + 文档编辑 + Draw）
+│   │   ├── knowledgeEditorModel.ts  # Draw 图形数据模型
+│   │   ├── knowledge.css      # 知识库样式
+│   │   ├── knowledge-editor.css    # 编辑器/Draw 样式
+│   │   └── shell.css          # Shell 布局样式
+│   └── knowledge-editor.html  # React SPA 入口
 ├── core-domain/               # 领域模型
 ├── core-application/          # 应用层
 ├── storage-sqlite/            # SQLite 存储

@@ -17,3 +17,4 @@ export interface KnowledgeFile{id:string;folderId?:string;name:string;ext:string
 export interface KnowledgeDocument{id:string;folderId?:string;title:string;contentHtml:string;drawingJson:string;version:number;createdAt:string;updatedAt:string}
 export interface KnowledgeDocumentVersion{documentId:string;version:number;title:string;contentHtml:string;drawingJson:string;changeSummary:string;createdAt:string}
 export interface KnowledgeAiSuggestion{suggestion:string;provider:string;model:string;fallback:boolean}
+export interface KnowledgePreview{id:string;name:string;mimeType:string;sizeBytes:number;ext:string;kind:'text'|'image'|'pdf'|'binary';content:string|null;contentBase64:string|null}

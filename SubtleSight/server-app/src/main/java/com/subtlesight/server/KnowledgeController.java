@@ -42,7 +42,9 @@ public class KnowledgeController {
     }
 
     @GetMapping("/files")
-    List<KnowledgeFile> files(@RequestParam(required = false) UUID folderId) {
+    List<KnowledgeFile> files(@RequestParam(required = false) UUID folderId,
+                              @RequestParam(defaultValue = "false") boolean all) {
+        if (all) return knowledge.allFiles();
         return knowledge.files(folderId);
     }
 

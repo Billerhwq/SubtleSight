@@ -284,7 +284,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
           <>
             <section className="ke-property-section">
               <label>节点文字</label>
-              <Input value={selected.label} onChange={label => onChange(updateNode(model, selected.id, { label }))} />
+              <Input value={selected.label} onChange={label => onChange(updateNode(model, selected!.id, { label }))} />
             </section>
             <section className="ke-property-section">
               <label>填充颜色</label>
@@ -295,7 +295,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
                     className={selected.fill === color ? 'active' : ''}
                     style={{ background: color }}
                     aria-label={`填充色 ${color}`}
-                    onClick={() => onChange(updateNode(model, selected.id, { fill: color }))}
+                    onClick={() => onChange(updateNode(model, selected!.id, { fill: color }))}
                   />
                 ))}
               </div>
@@ -316,7 +316,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
                 theme="borderless"
                 icon={<IconDelete />}
                 onClick={() => {
-                  onChange(removeNode(model, selected.id));
+                  onChange(removeNode(model, selected!.id));
                   setSelectedId(null);
                 }}
               >
@@ -336,16 +336,18 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
   );
 }
 
-export function KnowledgeEditorPage(): ReactNode {
+export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded?: boolean; onBack?: () => void; documentId?: string | null }): ReactNode {
   const queryClient = useQueryClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const qc = queryClient as any;
   const documentsQuery = useQuery({
     queryKey: ['knowledge-documents'],
     queryFn: () => get<KnowledgeDocument[]>('/knowledge/documents?all=true'),
-  });
+  } as any);
   const foldersQuery = useQuery({
     queryKey: ['knowledge-folders'],
     queryFn: () => get<KnowledgeFolder[]>('/knowledge/folders'),
-  });
+  } as any);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [draft, setDraft] = useState<KnowledgeDocument | null>(null);
   const [loadingDocument, setLoadingDocument] = useState(false);
@@ -366,9 +368,10 @@ export function KnowledgeEditorPage(): ReactNode {
   const editor = useEditor({
     extensions: [StarterKit],
     content: '',
+    immediatelyRender: false,
     editorProps: { attributes: { class: 'ke-prose' } },
     onUpdate: ({ editor: activeEditor }) => {
-      const html = activeEditor.getHTML();
+      const html = (activeEditor as any).getHTML();
       setDraft(current => {
         if (!current || current.contentHtml === html) return current;
         const next = { ...current, contentHtml: html };
@@ -377,10 +380,13 @@ export function KnowledgeEditorPage(): ReactNode {
         return next;
       });
     },
-  });
+  } as any);
 
-  const documents = documentsQuery.data ?? [];
-  const folders = foldersQuery.data ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ed = editor as any;
+
+  const documents = (documentsQuery as any).data ?? [] as KnowledgeDocument[];
+  const folders = (foldersQuery as any).data ?? [] as KnowledgeFolder[];
   const drawing = useMemo(() => parseDrawing(draft?.drawingJson), [draft?.drawingJson]);
   const currentSignature = draft ? draftSignature(draft) : '';
 
@@ -404,7 +410,7 @@ export function KnowledgeEditorPage(): ReactNode {
       setDraft(loaded);
       lastPersistedRef.current = draftSignature(loaded);
       setSaveState('saved');
-      editor?.commands.setContent(loaded.contentHtml, { emitUpdate: false });
+      ed?.commands.setContent(loaded.contentHtml, { emitUpdate: false });
     } catch (error) {
       Toast.error(error instanceof Error ? error.message : '文档加载失败');
     } finally {
@@ -413,8 +419,12 @@ export function KnowledgeEditorPage(): ReactNode {
   }, [editor]);
 
   useEffect(() => {
-    if (!currentId && documents.length > 0) setCurrentId(documents[0].id);
-  }, [currentId, documents]);
+    if (documentId && documentId !== currentId) setCurrentId(documentId);
+  }, [documentId]);
+
+  useEffect(() => {
+    if (!documentId && !currentId && documents.length > 0) setCurrentId(documents[0].id);
+  }, [currentId, documents, documentId]);
 
   useEffect(() => {
     if (currentId) void loadDocument(currentId);
@@ -449,8 +459,9 @@ export function KnowledgeEditorPage(): ReactNode {
           setDraft(next);
         }
         lastPersistedRef.current = signature;
-        setSaveState(draftRef.current && draftSignature(draftRef.current) !== signature ? 'dirty' : 'saved');
-        await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] });
+        const currentDraft = draftRef.current;
+        setSaveState(currentDraft && draftSignature(currentDraft) !== signature ? 'dirty' : 'saved');
+        await qc.invalidateQueries({ queryKey: ['knowledge-documents'] });
         if (notify) Toast.success('文档已保存');
         return true;
       } catch (error) {
@@ -495,7 +506,7 @@ export function KnowledgeEditorPage(): ReactNode {
         contentHtml: DEFAULT_CONTENT,
         drawingJson: stringifyDrawing(DEFAULT_DRAWING),
       });
-      await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] });
+      await qc.invalidateQueries({ queryKey: ['knowledge-documents'] });
       setCurrentId(created.id);
       setMode('document');
       Toast.success('已创建新文档');
@@ -507,20 +518,21 @@ export function KnowledgeEditorPage(): ReactNode {
   const deleteCurrent = () => {
     const current = draftRef.current;
     if (!current) return;
-    Modal.confirm({
+    const doDelete = async () => {
+      await del(`/knowledge/documents/${current.id}`);
+      const remaining = documents.filter(item => item.id !== current.id);
+      draftRef.current = null;
+      setDraft(null);
+      setCurrentId(remaining[0]?.id ?? null);
+      await qc.invalidateQueries({ queryKey: ['knowledge-documents'] });
+      Toast.success('文档已删除');
+    };
+    (Modal as any).confirm({
       title: '删除文档',
       content: `确定删除「${current.title}」及其版本历史吗？`,
       okText: '删除',
-      okButtonProps: { type: 'danger', theme: 'solid' },
-      onOk: async () => {
-        await del(`/knowledge/documents/${current.id}`);
-        const remaining = documents.filter(item => item.id !== current.id);
-        draftRef.current = null;
-        setDraft(null);
-        setCurrentId(remaining[0]?.id ?? null);
-        await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] });
-        Toast.success('文档已删除');
-      },
+      okButtonProps: { type: 'danger' as const, theme: 'solid' as const },
+      onOk: () => { void doDelete(); },
     });
   };
 
@@ -548,11 +560,11 @@ export function KnowledgeEditorPage(): ReactNode {
       );
       draftRef.current = restored;
       setDraft(restored);
-      editor?.commands.setContent(restored.contentHtml, { emitUpdate: false });
+      ed?.commands.setContent(restored.contentHtml, { emitUpdate: false });
       lastPersistedRef.current = draftSignature(restored);
       setSaveState('saved');
       setVersionsOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] });
+      await qc.invalidateQueries({ queryKey: ['knowledge-documents'] });
       Toast.success(`已恢复到 V${version}，并生成新版本 V${restored.version}`);
     } catch (error) {
       Toast.error(error instanceof Error ? error.message : '恢复失败');
@@ -565,8 +577,8 @@ export function KnowledgeEditorPage(): ReactNode {
     setAiLoading(true);
     setAiSuggestion(null);
     try {
-      const { from, to } = editor?.state.selection ?? { from: 0, to: 0 };
-      const selectedText = editor && from !== to ? editor.state.doc.textBetween(from, to, ' ') : '';
+      const { from, to } = ed?.state.selection ?? { from: 0, to: 0 };
+      const selectedText = ed && from !== to ? ed.state.doc.textBetween(from, to, ' ') : '';
       const result = await post<KnowledgeAiSuggestion>(`/knowledge/documents/${current.id}/ai-assist`, {
         instruction: aiInstruction,
         selectedText,
@@ -580,8 +592,8 @@ export function KnowledgeEditorPage(): ReactNode {
   };
 
   const insertAiSuggestion = () => {
-    if (!editor || !aiSuggestion) return;
-    editor.chain().focus().insertContent(`<p>${escapeHtml(aiSuggestion.suggestion)}</p>`).run();
+    if (!ed || !aiSuggestion) return;
+    ed.chain().focus().insertContent(`<p>${escapeHtml(aiSuggestion.suggestion)}</p>`).run();
     setAiOpen(false);
     Toast.success('AI 建议已插入正文，等待自动保存');
   };
@@ -612,7 +624,8 @@ export function KnowledgeEditorPage(): ReactNode {
   ];
 
   return (
-    <div className="ke-page">
+    <div className={`ke-page${embedded ? ' embedded' : ''}`}>
+      {!embedded && (
       <aside className="ke-documents-pane">
         <div className="ke-pane-title">
           <div>
@@ -620,7 +633,7 @@ export function KnowledgeEditorPage(): ReactNode {
             <span>{documents.length} 篇文档</span>
           </div>
           <div className="ke-pane-title-actions">
-            <button title="刷新" onClick={() => void documentsQuery.refetch()}><IconRefresh size="small" /></button>
+            <button title="刷新" onClick={() => void (documentsQuery as any).refetch()}><IconRefresh size="small" /></button>
             <button title="新建文档" onClick={() => void createDocument()}><IconPlus size="small" /></button>
           </div>
         </div>
@@ -629,7 +642,7 @@ export function KnowledgeEditorPage(): ReactNode {
           新建文档
         </button>
         <div className="ke-document-list">
-          {documentsQuery.isLoading ? (
+          {(documentsQuery as any).isLoading ? (
             <div className="ke-list-loading"><Spin /></div>
           ) : documents.length === 0 ? (
             <div className="ke-list-empty">还没有文档<br />点击上方开始写作</div>
@@ -652,9 +665,15 @@ export function KnowledgeEditorPage(): ReactNode {
           文档与 Draw 图形统一保存到知识库 SQLite，并保留完整版本。
         </div>
       </aside>
+      )}
 
       <section className="ke-editor-area">
         <header className="ke-editor-topbar">
+          {embedded && (
+            <Button theme="borderless" type="tertiary" onClick={onBack} style={{ marginRight: 8 }}>
+              ← 返回知识库
+            </Button>
+          )}
           <div className="ke-breadcrumb">
             <IconFolderStroked />
             <span>知识库</span>
@@ -668,7 +687,7 @@ export function KnowledgeEditorPage(): ReactNode {
           <Button theme="borderless" icon={<IconEdit />} onClick={() => setAiOpen(true)} disabled={!draft}>AI 辅助</Button>
           <Button theme="borderless" icon={<IconArticle />} onClick={() => void openVersions()} disabled={!draft}>历史</Button>
           <Button icon={<IconSave />} onClick={() => void saveCurrent('手动保存', true)} disabled={!draft}>保存</Button>
-          <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => void createDocument()}>新建</Button>
+          {!embedded && <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => void createDocument()}>新建</Button>}
         </header>
 
         <div className="ke-modebar">
@@ -712,16 +731,16 @@ export function KnowledgeEditorPage(): ReactNode {
                   <span>本机用户</span><i /> <span>V{draft.version}</span><i /> <span>{relativeTime(draft.updatedAt)}更新</span>
                 </div>
                 <div className="ke-rich-toolbar">
-                  <button className={editor?.isActive('bold') ? 'active' : ''} onClick={() => editor?.chain().focus().toggleBold().run()}><strong>B</strong></button>
-                  <button className={editor?.isActive('italic') ? 'active' : ''} onClick={() => editor?.chain().focus().toggleItalic().run()}><em>I</em></button>
+                  <button className={ed?.isActive('bold') ? 'active' : ''} onClick={() => ed?.chain().focus().toggleBold().run()}><strong>B</strong></button>
+                  <button className={ed?.isActive('italic') ? 'active' : ''} onClick={() => ed?.chain().focus().toggleItalic().run()}><em>I</em></button>
                   <span />
-                  <button className={editor?.isActive('heading', { level: 2 }) ? 'active' : ''} onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>H2</button>
-                  <button className={editor?.isActive('bulletList') ? 'active' : ''} onClick={() => editor?.chain().focus().toggleBulletList().run()}>• 列表</button>
+                  <button className={ed?.isActive('heading', { level: 2 }) ? 'active' : ''} onClick={() => ed?.chain().focus().toggleHeading({ level: 2 }).run()}>H2</button>
+                  <button className={ed?.isActive('bulletList') ? 'active' : ''} onClick={() => ed?.chain().focus().toggleBulletList().run()}>• 列表</button>
                   <span />
-                  <button onClick={() => editor?.chain().focus().undo().run()}>↶</button>
-                  <button onClick={() => editor?.chain().focus().redo().run()}>↷</button>
+                  <button onClick={() => ed?.chain().focus().undo().run()}>↶</button>
+                  <button onClick={() => ed?.chain().focus().redo().run()}>↷</button>
                 </div>
-                <EditorContent editor={editor} />
+                <EditorContent editor={ed} />
 
                 <section className="ke-diagram-block" id="ke-diagram-block">
                   <header>
@@ -762,7 +781,7 @@ export function KnowledgeEditorPage(): ReactNode {
         title="版本历史"
         visible={versionsOpen}
         width={620}
-        footer={null}
+        footer={<></> as any}
         onCancel={() => setVersionsOpen(false)}
       >
         {versionsLoading ? <div className="ke-modal-loading"><Spin /></div> : (
@@ -784,6 +803,7 @@ export function KnowledgeEditorPage(): ReactNode {
         )}
       </Modal>
 
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
       <Modal
         title="AI 文档助手"
         visible={aiOpen}
@@ -795,7 +815,7 @@ export function KnowledgeEditorPage(): ReactNode {
             <Button loading={aiLoading} onClick={() => void requestAi()}>生成建议</Button>
             <Button theme="solid" type="primary" disabled={!aiSuggestion} onClick={insertAiSuggestion}>插入正文</Button>
           </div>
-        )}
+        ) as any}
       >
         <label className="ke-modal-label">希望 AI 做什么？</label>
         <Input value={aiInstruction} onChange={setAiInstruction} placeholder="例如：提炼要点、完善结构、生成验收标准" />
@@ -811,12 +831,13 @@ export function KnowledgeEditorPage(): ReactNode {
           onChange={event => setAiSuggestion(current => current ? { ...current, suggestion: event.target.value } : null)}
           placeholder={aiLoading ? '正在分析当前文档…' : '点击“生成建议”，结果会显示在这里。'}
         />
-        {aiSuggestion && (
+        {aiSuggestion ? (
           <div className="ke-ai-provider">
             {aiSuggestion.fallback ? '当前未配置在线模型，使用本地规则建议' : `由 ${aiSuggestion.provider} · ${aiSuggestion.model} 生成`}
           </div>
-        )}
+        ) : <></>}
       </Modal>
     </div>
   );
 }
+

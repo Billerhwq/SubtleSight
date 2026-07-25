@@ -88,6 +88,10 @@ public class SqliteKnowledgeRepository {
         return jdbc.query("SELECT * FROM knowledge_files WHERE folder_id=? ORDER BY name", FILE_MAPPER, folderId.toString());
     }
 
+    public List<KnowledgeFile> listAllFiles() {
+        return jdbc.query("SELECT * FROM knowledge_files ORDER BY name", FILE_MAPPER);
+    }
+
     public Optional<KnowledgeFile> findFile(UUID id) {
         List<KnowledgeFile> rows = jdbc.query("SELECT * FROM knowledge_files WHERE id=?", FILE_MAPPER, id.toString());
         return rows.stream().findFirst();
