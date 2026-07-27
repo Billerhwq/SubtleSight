@@ -66,9 +66,9 @@
 .ke-folder-select{width:190px}
 .ke-editor-loading{display:grid;place-items:center;background:#f5f6f8}
 
-.ke-document-layout{display:grid;min-width:0;min-height:0;grid-template-columns:minmax(600px,1fr) 230px;background:#f5f6f8}
+.ke-document-layout{display:grid;min-width:0;min-height:0;grid-template-columns:minmax(700px,1fr) 230px;background:#f5f6f8}
 .ke-paper-scroll{min-width:0;min-height:0;padding:28px 34px 60px;overflow:auto;scroll-behavior:smooth}
-.ke-paper{width:min(820px,100%);min-height:920px;margin:0 auto;padding:58px 72px 82px;background:#fff;border:1px solid #e1e6ed;border-radius:4px;box-shadow:0 11px 30px #1d29390b}
+.ke-paper{width:100%;max-width:1440px;min-height:1440px;margin:0 auto;padding:58px 82px 82px;background:#fff;border:1px solid #e1e6ed;border-radius:4px;box-shadow:0 11px 30px #1d29390b}
 .ke-document-kicker{margin-bottom:15px;color:var(--ke-accent);font-size:11px;font-weight:750;letter-spacing:.08em}
 .ke-title-input.semi-input-wrapper{height:auto;padding:0;border:0!important;background:transparent!important;box-shadow:none!important}
 .ke-title-input .semi-input{height:auto;padding:0;color:var(--ke-ink);font-size:34px;font-weight:760;line-height:1.25;letter-spacing:-.035em}

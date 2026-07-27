@@ -6,7 +6,7 @@ export class ApiError extends Error {
 
 function csrf(): string | undefined {
   const cookie = document.cookie.split('; ').find(v => v.startsWith('XSRF-TOKEN='));
-  return cookie?.split('=')[1];
+  return cookie ? cookie.substring(cookie.indexOf('=') + 1) : undefined;
 }
 
 function getCsrfToken(): string {
@@ -23,8 +23,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = getCsrfToken();
     if (token) headers.set('X-XSRF-TOKEN', decodeURIComponent(token));
   }
-  const fetchInit: RequestInit = { ...init, headers, credentials: 'same-origin' };
-  const response = await fetch(`/api/v1${path}`, fetchInit);
+  const fetchInit = { ...init, headers, credentials: 'same-origin' as const };
+  const response = await fetch(`/api/v1${path}`, fetchInit as RequestInit);
   if (!response.ok) {
     let detail = response.statusText;
     try { const p: unknown = await response.json(); detail = (p as Record<string, unknown>).detail as string ?? detail; } catch { /* non-JSON */ }
