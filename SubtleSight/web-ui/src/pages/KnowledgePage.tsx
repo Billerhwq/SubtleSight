@@ -101,8 +101,8 @@ export function KnowledgePage(): ReactNode {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadResults, setUploadResults] = useState<Array<{ name: string; success: boolean; error?: string }> | null>(null);
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const dropZoneRef = useRef<HTMLDivElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null!);
+  const dropZoneRef = useRef<HTMLDivElement>(null!);
   const [dragOver, setDragOver] = useState(false);
   const [renameTarget, setRenameTarget] = useState<KnowledgeFile | KnowledgeDocument | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -356,7 +356,7 @@ export function KnowledgePage(): ReactNode {
       content: `确定删除文件夹「${folder.name}」吗？其中的文件和子文件夹不会被删除，将移至根目录。`,
       okText: '删除',
       okButtonProps: { type: 'danger', theme: 'solid' },
-      onOk: () => deleteFolder.mutate(folder.id),
+      onOk: () => deleteFolder.mutate(folder.id as any),
     });
   };
 
@@ -365,7 +365,7 @@ export function KnowledgePage(): ReactNode {
     content: `确定删除「${file.name}」吗？此操作不可恢复。`,
     okText: '删除',
     okButtonProps: { type: 'danger', theme: 'solid' },
-    onOk: () => deleteFile.mutate(file.id),
+    onOk: () => deleteFile.mutate(file.id as any),
   });
 
   const confirmDeleteDoc = (doc: KnowledgeDocument) => (Modal as any).confirm({
@@ -373,7 +373,7 @@ export function KnowledgePage(): ReactNode {
     content: `确定删除「${doc.title}」及其版本历史吗？`,
     okText: '删除',
     okButtonProps: { type: 'danger', theme: 'solid' },
-    onOk: () => deleteDocument.mutate(doc.id),
+    onOk: () => deleteDocument.mutate(doc.id as any),
   });
 
   // --- Preview ---
@@ -405,9 +405,10 @@ export function KnowledgePage(): ReactNode {
     e.preventDefault();
     previewResizeRef.current = { startX: e.clientX, startWidth: previewWidth };
     const onMove = (ev: MouseEvent) => {
-      if (!previewResizeRef.current) return;
-      const delta = previewResizeRef.current.startX - ev.clientX;
-      setPreviewWidth(Math.max(280, Math.min(800, previewResizeRef.current.startWidth + delta)));
+      const cur = previewResizeRef.current;
+      if (!cur) return;
+      const delta = cur.startX - ev.clientX;
+      setPreviewWidth(Math.max(280, Math.min(800, cur.startWidth + delta)));
     };
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove);
@@ -448,7 +449,7 @@ export function KnowledgePage(): ReactNode {
             key={node.id}
             onContextMenu={e => showCtx(e, [
               { label: '新建文件夹', icon: <IconPlus size="small" />, onClick: () => { setNewFolderName(''); setNewFolderParentId(node.id); setNewFolderOpen(true); } },
-              { label: '新建文档', icon: <IconArticle size="small" />, onClick: () => { setNewFolderParentId(node.id); createDocument.mutate(node.id); } },
+              { label: '新建文档', icon: <IconArticle size="small" />, onClick: () => { setNewFolderParentId(node.id); createDocument.mutate(node.id as any); } },
               { label: '重命名', icon: <IconEdit size="small" />, onClick: () => { /* TODO */ Toast.info('重命名功能开发中'); } },
               { label: '删除', icon: <IconDelete size="small" />, danger: true, onClick: () => confirmDeleteFolder(node) },
             ])}
@@ -645,7 +646,7 @@ export function KnowledgePage(): ReactNode {
                   onClick={() => openFolder(null)}
                   onContextMenu={e => showCtx(e, [
                     { label: '新建文件夹', icon: <IconFolderStroked size="small" />, onClick: () => { setNewFolderName(''); setNewFolderParentId(null); setNewFolderOpen(true); } },
-                    { label: '新建文档', icon: <IconArticle size="small" />, onClick: () => createDocument.mutate(null) },
+                    { label: '新建文档', icon: <IconArticle size="small" />, onClick: () => createDocument.mutate(null as any) },
                   ])}
                 >
                   <span
@@ -719,7 +720,7 @@ export function KnowledgePage(): ReactNode {
                       <Dropdown.Menu>
                         <Dropdown.Item icon={<IconFolderStroked />} onClick={() => { setNewFolderName(''); setNewFolderParentId(current); setNewFolderOpen(true); }}>新建文件夹</Dropdown.Item>
                         <Dropdown.Item icon={<IconFile />} onClick={() => setUploadOpen(true)}>上传文件</Dropdown.Item>
-                        <Dropdown.Item icon={<IconArticle />} onClick={() => createDocument.mutate(current)}>新建文档</Dropdown.Item>
+                        <Dropdown.Item icon={<IconArticle />} onClick={() => createDocument.mutate(current as any)}>新建文档</Dropdown.Item>
                       </Dropdown.Menu>
                     }
                   >
@@ -755,7 +756,7 @@ export function KnowledgePage(): ReactNode {
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                   {previewItem.kind === 'document' && (
-                    <button className="kb-preview-doc-edit-btn" onClick={() => openEditDocument(previewItem.document.id)}>
+                    <button className="kb-preview-doc-edit-btn" onClick={() => { if (previewItem?.kind === 'document') openEditDocument(previewItem.document.id); }}>
                       <IconEdit size="small" />编辑
                     </button>
                   )}
@@ -791,7 +792,7 @@ export function KnowledgePage(): ReactNode {
                         </div>
                       </div>
                       <div className="kb-preview-doc-actions">
-                        <button className="kb-preview-doc-edit-btn" onClick={() => openEditDocument(previewItem.document.id)}>
+                        <button className="kb-preview-doc-edit-btn" onClick={() => { if (previewItem?.kind === 'document') openEditDocument(previewItem.document.id); }}>
                           <IconEdit size="small" />编辑
                         </button>
                       </div>
@@ -800,7 +801,7 @@ export function KnowledgePage(): ReactNode {
                       <div className="kb-preview-doc-paper">
                         <div
                           className="kb-preview-doc-body"
-                          dangerouslySetInnerHTML={{ __html: previewItem.document.contentHtml || '<p style="color:var(--text-3)">空白文档</p>' }}
+                          dangerouslySetSetInnerHTML={{ __html: previewItem.document.contentHtml || '<p style="color:var(--text-3)">空白文档</p>' }}
                         />
                       </div>
                     </div>
@@ -869,13 +870,13 @@ export function KnowledgePage(): ReactNode {
         title="新建文件夹"
         visible={newFolderOpen}
         onCancel={() => setNewFolderOpen(false)}
-        onOk={() => { if (newFolderName.trim()) createFolder.mutate(newFolderParentId); else Toast.warning('请输入文件夹名称'); }}
+        onOk={() => { if (newFolderName.trim()) createFolder.mutate(newFolderParentId as any); else Toast.warning('请输入文件夹名称'); }}
         okText="创建"
         cancelText="取消"
         confirmLoading={createFolder.isPending}
       >
         <label className="field-label">文件夹名称</label>
-        <Input value={newFolderName} onChange={setNewFolderName} placeholder="请输入名称" showClear onEnterPress={() => { if (newFolderName.trim()) createFolder.mutate(newFolderParentId); }} />
+        <Input value={newFolderName} onChange={setNewFolderName} placeholder="请输入名称" showClear onEnterPress={() => { if (newFolderName.trim()) createFolder.mutate(newFolderParentId as any); }} />
       </Modal>
 
       <Modal
@@ -885,7 +886,7 @@ export function KnowledgePage(): ReactNode {
         onOk={async () => {
           if (!renameValue.trim()) { Toast.warning('请输入名称'); return; }
           if (renameTarget && 'ext' in renameTarget) {
-            renameFile.mutate({ id: renameTarget.id, name: renameValue });
+            renameFile.mutate({ id: renameTarget.id, name: renameValue } as any);
           } else if (renameTarget) {
             try {
               const doc = await get<KnowledgeDocument>(`/knowledge/documents/${renameTarget.id}`);
@@ -919,7 +920,7 @@ export function KnowledgePage(): ReactNode {
           if (!moveTarget) return;
           const targetFolderId = moveFolderId === 'root' ? null : moveFolderId;
           if ('ext' in moveTarget) {
-            moveFile.mutate({ id: moveTarget.id, folderId: targetFolderId });
+            moveFile.mutate({ id: moveTarget.id, folderId: targetFolderId } as any);
           } else {
             get<KnowledgeDocument>(`/knowledge/documents/${moveTarget.id}`).then(doc =>
               put(`/knowledge/documents/${moveTarget.id}`, {
@@ -1040,7 +1041,7 @@ export function KnowledgePage(): ReactNode {
                 justifyContent: 'center',
                 gap: 8,
               }}
-              onClick={() => uploadInputRef.current?.click()}
+              onClick={() => { uploadInputRef.current?.click(); }}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={(e) => { e.preventDefault(); setDragOver(false); handleUploadFiles(e.dataTransfer.files); }}
