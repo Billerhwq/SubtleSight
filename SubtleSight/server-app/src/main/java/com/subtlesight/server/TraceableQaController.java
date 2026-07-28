@@ -4,11 +4,11 @@ import com.subtlesight.application.TraceableQaPorts.Repository;
 import com.subtlesight.domain.TraceableQa.*;
 import com.subtlesight.qa.TraceableQaService;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeDocument;
+import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository.KnowledgeFile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api/v1/qa")
@@ -17,10 +17,13 @@ public class TraceableQaController {
     private final TraceableQaService qa;
     private final TraceableQaJobs jobs;
     private final TraceableQaPersistenceService persistence;
+    private final KnowledgeService knowledge;
 
     public TraceableQaController(Repository repository, TraceableQaService qa,
-                                 TraceableQaJobs jobs, TraceableQaPersistenceService persistence) {
+                                 TraceableQaJobs jobs, TraceableQaPersistenceService persistence,
+                                 KnowledgeService knowledge) {
         this.repository = repository; this.qa = qa; this.jobs = jobs; this.persistence = persistence;
+        this.knowledge = knowledge;
     }
 
     @PostMapping("/scopes/resolve")
@@ -42,7 +45,26 @@ public class TraceableQaController {
     }
 
     @GetMapping("/answers/{answerId}")
-    TraceableQaService.AnswerView answer(@PathVariable UUID answerId) { return qa.answerView(answerId); }
+    Map<String, Object> answer(@PathVariable UUID answerId) {
+        var view = qa.answerView(answerId);
+        // Build a resourceId → resourceName lookup so the frontend can show
+        // human-readable names instead of "FILE/85f3c7ee".
+        Map<String, String> resourceNames = new LinkedHashMap<>();
+        for (var claim : view.claims()) {
+            for (var citation : claim.citations()) {
+                String key = citation.resourceId().toString();
+                if (!resourceNames.containsKey(key)) {
+                    resourceNames.put(key, resolveResourceName(citation.resourceType(), citation.resourceId()));
+                }
+            }
+        }
+        return Map.of(
+                "answer", view.answer(),
+                "claims", view.claims(),
+                "scopeSnapshotJson", view.scopeSnapshotJson(),
+                "resourceNames", resourceNames
+        );
+    }
 
     @GetMapping("/citations/{citationId}/resolve")
     CitationResolution citation(@PathVariable UUID citationId) { return qa.resolveCitation(citationId); }
@@ -55,6 +77,23 @@ public class TraceableQaController {
     @PostMapping("/claims/{claimId}/add-to-draw")
     KnowledgeDocument addToDraw(@PathVariable UUID claimId, @RequestBody AddToDrawRequest request) {
         return persistence.addClaimToDraw(claimId, request.documentId(), request.expectedVersion());
+    }
+
+    private String resolveResourceName(ResourceType type, UUID resourceId) {
+        try {
+            return switch (type) {
+                case DOCUMENT, DRAW_NODE -> {
+                    var doc = knowledge.findDocument(resourceId);
+                    yield doc.isPresent() ? doc.get().title() : type.name();
+                }
+                case FILE -> {
+                    var file = knowledge.findFile(resourceId);
+                    yield file.isPresent() ? file.get().name() : type.name();
+                }
+            };
+        } catch (Exception e) {
+            return type.name();
+        }
     }
 
     public record ScopeRequest(List<ScopeRef> scopes) {}

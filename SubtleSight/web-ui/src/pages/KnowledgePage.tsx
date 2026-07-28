@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Dropdown, Input, Modal, Spin, Toast, TreeSelect } from '@douyinfe/semi-ui';
 import {
@@ -132,6 +133,35 @@ export function KnowledgePage(): ReactNode {
   const documents = useMemo(() => (documentsQuery as any).data ?? [], [(documentsQuery as any).data]) as KnowledgeDocument[];
   const tree = useMemo(() => buildTree(folders), [folders]);
   const folderMap = useMemo(() => new Map(folders.map(f => [f.id, f])), [folders]);
+
+  // Handle URL search params — open document / preview file
+  const [searchParams] = useSearchParams();
+  const lastOpenedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const docId = searchParams.get('documentId');
+    const fileId = searchParams.get('fileId');
+    if (!docId && !fileId) return;
+
+    if (docId && docId !== lastOpenedRef.current) {
+      const doc = documents.find(d => d.id === docId);
+      if (doc) {
+        lastOpenedRef.current = docId;
+        if (doc.folderId) openFolder(doc.folderId ?? null);
+        setTimeout(() => {
+          setEditingDocumentId(docId);
+          setViewMode('edit');
+        }, 100);
+      }
+    } else if (fileId && fileId !== lastOpenedRef.current) {
+      const file = allFiles.find(f => f.id === fileId);
+      if (file) {
+        lastOpenedRef.current = fileId;
+        if (file.folderId) setCurrent(file.folderId ?? null);
+        openPreview({ kind: 'file', file });
+      }
+    }
+  }, [searchParams, documents, allFiles]);
 
   const invalidate = () => {
     client.invalidateQueries({ queryKey: ['knowledge-folders'] });
@@ -538,6 +568,7 @@ export function KnowledgePage(): ReactNode {
       const doc = item.document;
       return (
         <article
+          key={doc.id}
           className={`kb-file-card${selectedCard === doc.id ? ' selected' : ''}`}
           tabIndex={0}
           onClick={() => setSelectedCard(doc.id)}
@@ -563,6 +594,7 @@ export function KnowledgePage(): ReactNode {
     const kind = docKind(file.ext);
     return (
       <article
+        key={file.id}
         className={`kb-file-card${selectedCard === file.id ? ' selected' : ''}`}
         tabIndex={0}
         onClick={() => setSelectedCard(file.id)}

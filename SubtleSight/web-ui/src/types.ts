@@ -18,3 +18,8 @@ export interface KnowledgeDocument{id:string;folderId?:string;title:string;conte
 export interface KnowledgeDocumentVersion{documentId:string;version:number;title:string;contentHtml:string;drawingJson:string;changeSummary:string;createdAt:string}
 export interface KnowledgeAiSuggestion{suggestion:string;provider:string;model:string;fallback:boolean}
 export interface KnowledgePreview{id:string;name:string;mimeType:string;sizeBytes:number;ext:string;kind:'text'|'image'|'pdf'|'binary';content:string|null;contentBase64:string|null}
+/** Agent types */
+export interface TurnRequest { message: string; context: Record<string, unknown>; sessionId?: string }
+export interface TurnResponse { turnId: string; sessionId: string; message: string; tools: string[]; confirmationRequired: boolean }
+export interface TurnEvent { turnId: string; sessionId?: string; message: string; tools: string[]; confirmationRequired: boolean; result?: Record<string, unknown> }
+export interface AssistantSession { id: string; title: string; createdAt: string; updatedAt: string; archived: boolean }

@@ -1,6 +1,19 @@
 package com.subtlesight.server;
 
+import com.subtlesight.agent.WebAgentService;
+import com.subtlesight.agent.events.TurnEventPublisher;
+import com.subtlesight.agent.orchestrator.AssistantOrchestrator;
+import com.subtlesight.agent.planner.Planner;
+import com.subtlesight.agent.planner.KeywordPlanner;
+import com.subtlesight.agent.planner.LlmPlanner;
+import com.subtlesight.agent.policy.ActionPolicy;
+import com.subtlesight.agent.tools.ToolRegistry;
+import com.subtlesight.application.AssistantPorts;
+import com.subtlesight.application.Ports.ReaderProvider;
 import com.subtlesight.application.SubtleSightFacade;
+import com.subtlesight.provider.search.SafeReaderProvider;
+import com.subtlesight.research.WebMaterialProvider;
+import com.subtlesight.watchlist.WatchlistScheduler;
 import com.subtlesight.application.Ports.*;
 import com.subtlesight.application.TraceableQaPorts.*;
 import com.subtlesight.calendar.*;
@@ -10,6 +23,7 @@ import com.subtlesight.connectors.*;
 import com.subtlesight.discovery.DiscoveryEngine;
 import com.subtlesight.discovery.DiscoveryPlanner;
 import com.subtlesight.document.DocumentProcessor;
+import com.subtlesight.domain.Models.*;
 import com.subtlesight.evidence.EvidenceService;
 import com.subtlesight.jobs.*;
 import com.subtlesight.observability.BackupService;
@@ -25,6 +39,7 @@ import com.subtlesight.qa.HybridKnowledgeRetriever;
 import com.subtlesight.qa.TraceableQaService;
 import com.subtlesight.signal.SignalEngine;
 import com.subtlesight.storage.blob.ContentAddressedBlobStore;
+import com.subtlesight.storage.sqlite.SqliteAssistantRepository;
 import com.subtlesight.storage.sqlite.SqliteDataSourceFactory;
 import com.subtlesight.storage.sqlite.SqliteIntelligenceRepository;
 import com.subtlesight.storage.sqlite.SqliteKnowledgeRepository;
@@ -43,9 +58,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Configuration
 public class ApplicationConfiguration {
@@ -111,7 +124,9 @@ public class ApplicationConfiguration {
     @Bean EvidenceService evidenceService(IntelligenceRepository repository,Clock clock){return new EvidenceService(repository,clock);}
     @Bean WatchlistService watchlistService(IntelligenceRepository repository,ObjectMapper json,Clock clock){return new WatchlistService(repository,json,clock);}
     @Bean ReportService reportService(IntelligenceRepository repository,ObjectMapper json,Clock clock){return new ReportService(repository,json,clock);}
-    @Bean DeepResearchService researchService(IntelligenceRepository repository,@org.springframework.beans.factory.annotation.Qualifier("searchProviders") List<WebSearchProvider> providers,AiProvider ai,Clock clock){return new DeepResearchService(repository,providers,ai,(question,hits,max)->repository.listDocumentVersions(Math.min(Math.max(max,0),100)),clock);}
+    @Bean ReaderProvider readerProvider(SafeHttpClient http){return new SafeReaderProvider(http);}
+    @Bean WebMaterialProvider webMaterialProvider(IntelligenceRepository repository,ReaderProvider reader,Clock clock){return new WebMaterialProvider(repository,reader,clock);}
+    @Bean DeepResearchService researchService(IntelligenceRepository repository,@org.springframework.beans.factory.annotation.Qualifier("searchProviders") List<WebSearchProvider> providers,AiProvider ai,WebMaterialProvider materialProvider,Clock clock){return new DeepResearchService(repository,providers,ai,materialProvider,clock);}
     @Bean DurableJobQueue jobQueue(DataSource dataSource,Clock clock){return new DurableJobQueue(dataSource,clock,Duration.ofSeconds(30),new RetryPolicy(Duration.ofSeconds(2),Duration.ofMinutes(5),42));}
     @Bean(destroyMethod="close")DurableJobRunner jobRunner(DurableJobQueue queue,DeepResearchService research,KnowledgeUnitIndexingService indexing,TraceableQaService qa,ObjectMapper json){
         DurableJobRunner runner=new DurableJobRunner(queue);
@@ -121,4 +136,41 @@ public class ApplicationConfiguration {
         return runner;
     }
     @Bean BackupService backupService(DataSource dataSource,Path dataDirectory,ObjectMapper json,Clock clock){return new BackupService(dataSource,dataDirectory,json,clock);}
+    @Bean AssistantPorts.Repository assistantRepository(DataSource dataSource,Clock clock){return new SqliteAssistantRepository(dataSource,clock);}
+    @Bean ToolRegistry toolRegistry(AgentTools agentTools){
+        ToolRegistry registry=new ToolRegistry();
+        registry.register(agentTools);
+        return registry;
+    }
+    @Bean Planner agentPlanner(AiProvider ai, ToolRegistry toolRegistry){
+        return new LlmPlanner(ai, new KeywordPlanner(), toolRegistry);
+    }
+    @Bean ActionPolicy actionPolicy(Clock clock, ToolRegistry toolRegistry){
+        return ActionPolicy.withDefaults(clock, toolRegistry.highRiskTools());
+    }
+    @Bean OutboxEventPublisher outboxEventPublisher(DataSource dataSource, Clock clock, SseHub sseHub, ObjectMapper json){
+        return new OutboxEventPublisher(dataSource, clock, sseHub, json);
+    }
+    @Bean AssistantOrchestrator agentOrchestrator(Planner planner, ToolRegistry toolRegistry,
+            AssistantPorts.Repository assistantRepository, OutboxEventPublisher events, ActionPolicy policy,
+            AiProvider ai){
+        return new AssistantOrchestrator(planner, toolRegistry, assistantRepository, events, policy, ai);
+    }
+    @Bean WebAgentService webAgentService(AssistantOrchestrator orchestrator, ToolRegistry toolRegistry,
+            AssistantPorts.Repository assistantRepository){
+        // ToolExecutor adapter: bridges legacy interface to ToolRegistry
+        WebAgentService.ToolExecutor executor = (tool, message, context) -> {
+            Map<String, Object> args = new LinkedHashMap<>(context);
+            // Fallback: if no explicit params, use message as query
+            if (!args.containsKey("query") && !args.containsKey("title") && !args.containsKey("storyId")
+                    && !args.containsKey("researchId") && !args.containsKey("name")) {
+                args.put("query", message);
+            }
+            return toolRegistry.execute(tool, args);
+        };
+        return new WebAgentService(executor, assistantRepository, orchestrator);
+    }
+    @Bean WatchlistScheduler watchlistScheduler(IntelligenceRepository repository, WatchlistService watchlistService, ObjectMapper json, Clock clock, SseHub sseHub){
+        return new WatchlistScheduler(repository, watchlistService, json, clock, (targetId, data) -> sseHub.publish("watchlist_changed", data));
+    }
 }

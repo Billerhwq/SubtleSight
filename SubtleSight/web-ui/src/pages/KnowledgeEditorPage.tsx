@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -338,6 +339,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
 
 export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded?: boolean; onBack?: () => void; documentId?: string | null }): ReactNode {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const qc = queryClient as any;
   const documentsQuery = useQuery({
@@ -427,8 +429,43 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
   }, [currentId, documents, documentId]);
 
   useEffect(() => {
-    if (currentId) void loadDocument(currentId);
+    if (currentId) {
+      void loadDocument(currentId);
+      // Sync current document ID to URL so AgentDrawer context can pick it up
+      if (searchParams.get('documentId') !== currentId) {
+        setSearchParams({ documentId: currentId }, { replace: true });
+      }
+    }
   }, [currentId, loadDocument]);
+
+  // Listen for agent draw events — auto-refresh draft when agent modifies the current document
+  useEffect(() => {
+    const es = new EventSource('/api/v1/events');
+    const handler = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (!data.success) return;
+        const tool = data.toolName as string ?? '';
+        if (!tool.startsWith('draw_') && tool !== 'update_document') return;
+        const resultDocId = data.result?.documentId as string | undefined;
+        // Always refresh the document list
+        qc.invalidateQueries({ queryKey: ['knowledge-documents'] });
+        qc.invalidateQueries({ queryKey: ['knowledge-files'] });
+        qc.invalidateQueries({ queryKey: ['knowledge-files-all'] });
+        // If agent modified the document we're currently editing, reload draft
+        if (resultDocId && currentId === resultDocId) {
+          get<KnowledgeDocument>(`/knowledge/documents/${resultDocId}`).then(updated => {
+            draftRef.current = updated;
+            setDraft(updated);
+            lastPersistedRef.current = draftSignature(updated);
+            Toast.info('AI 助手已更新画布');
+          }).catch(() => { /* ignore reload failures */ });
+        }
+      } catch { /* ignore parse errors */ }
+    };
+    es.addEventListener('step_completed', handler);
+    return () => { es.removeEventListener('step_completed', handler); es.close(); };
+  }, [currentId, qc]);
 
   const saveCurrent = useCallback(async (changeSummary = '自动保存', notify = false): Promise<boolean> => {
     if (savePromiseRef.current) await savePromiseRef.current;

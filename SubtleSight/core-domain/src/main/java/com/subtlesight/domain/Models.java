@@ -188,10 +188,12 @@ public final class Models {
     public record UsageEntry(UUID id, String provider, String model, String purpose, long inputTokens,
                              long outputTokens, BigDecimal cost, String currency, Instant occurredAt) {}
 
-    public record AgentRequest(String message, boolean confirmed, Map<String, Object> context) {
+    public record AgentRequest(String message, boolean confirmed, Map<String, Object> context, java.util.UUID turnId, java.util.UUID sessionId) {
+        public AgentRequest(String message, boolean confirmed, Map<String, Object> context) { this(message, confirmed, context, null, null); }
         public AgentRequest { requireText(message, "message"); context = context == null ? Map.of() : Map.copyOf(context); }
     }
-    public record AgentResponse(String message, List<String> tools, Map<String, Object> result, boolean confirmationRequired) {
+    public record AgentResponse(String message, List<String> tools, Map<String, Object> result, boolean confirmationRequired, java.util.UUID turnId, java.util.UUID sessionId) {
+        public AgentResponse(String message, List<String> tools, Map<String, Object> result, boolean confirmationRequired) { this(message, tools, result, confirmationRequired, null, null); }
         public AgentResponse { tools = tools == null ? List.of() : List.copyOf(tools); result = result == null ? Map.of() : Map.copyOf(result); }
     }
 

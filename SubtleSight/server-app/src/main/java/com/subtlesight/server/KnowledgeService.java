@@ -162,6 +162,11 @@ public class KnowledgeService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "document not found"));
     }
 
+    /** Non-throwing lookup for a document by ID. */
+    public java.util.Optional<KnowledgeDocument> findDocument(UUID id) {
+        return repository.findDocument(id);
+    }
+
     @Transactional
     public KnowledgeDocument createDocument(UUID folderId, String title, String contentHtml, String drawingJson) {
         if (folderId != null && !repository.folderExists(folderId))
@@ -294,6 +299,11 @@ public class KnowledgeService {
     public KnowledgeFile requireFile(UUID id) {
         return repository.findFile(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "file not found"));
+    }
+
+    /** Non-throwing lookup for a file by ID. */
+    public java.util.Optional<KnowledgeFile> findFile(UUID id) {
+        return repository.findFile(id);
     }
 
     public SearchResult search(String keyword) {
