@@ -136,6 +136,8 @@ public final class AssistantOrchestrator {
             // step_completed
             publish(TurnEvent.stepCompleted(turnId, step.ordinal(), step.tool(),
                     te.success(), te.result()));
+            // Simulate streaming step content: emit chunked result lines
+            emitStepChunks(turnId, step.ordinal(), step.tool(), te);
             if (repo != null) repo.appendAudit(turnId, "tool_call",
                     "{\"tool\":\"" + step.tool() + "\",\"ordinal\":" + step.ordinal()
                             + ",\"success\":" + te.success() + "}");
@@ -210,6 +212,8 @@ public final class AssistantOrchestrator {
                     - 如果创建了文档，说明文档标题和用途
                     - 不要重复"已执行N个步骤"之类的内容
                     - 控制在 3-8 句话以内
+                    - 如果工具结果中包含 [引用来源: ...]，你必须在回答中使用对应的 [1]、[2] 等角标标注信息出处，
+                      角标放在被引用句子的末尾，例如："该功能支持并行计算[1]，并通过认证机制保证正确性[2]"
                     """;
 
             String userPrompt = "用户请求: " + userMessage + "\n\n工具执行结果:\n" + results;
@@ -232,8 +236,9 @@ public final class AssistantOrchestrator {
         return switch (tool) {
             case "search_local" -> {
                 Object hits = result.get("hits");
+                StringBuilder sb = new StringBuilder();
                 if (hits instanceof List<?> list) {
-                    StringBuilder sb = new StringBuilder("找到 " + list.size() + " 条结果");
+                    sb.append("找到 ").append(list.size()).append(" 条结果");
                     int i = 0;
                     for (Object h : list) {
                         if (i++ >= 3) break;
@@ -242,9 +247,11 @@ public final class AssistantOrchestrator {
                             sb.append(" | ").append(title);
                         }
                     }
-                    yield sb.toString();
+                } else {
+                    sb.append("搜索完成");
                 }
-                yield "搜索完成";
+                appendCitationSources(sb, result);
+                yield sb.toString();
             }
             case "create_document", "create_report" -> {
                 Object title = result.get("title");
@@ -266,13 +273,75 @@ public final class AssistantOrchestrator {
             }
             case "ask_question" -> {
                 Object answer = result.get("answer");
-                if (answer instanceof String s && s.length() > 200) {
-                    yield "回答: " + s.substring(0, 200) + "...";
+                StringBuilder sb = new StringBuilder();
+                if (answer instanceof String s) {
+                    sb.append("回答: ").append(s);
+                } else {
+                    sb.append("回答完成");
                 }
-                yield answer != null ? "回答: " + answer : "回答完成";
+                appendCitationSources(sb, result);
+                yield sb.toString();
+            }
+            case "search_documents" -> {
+                Object results = result.get("results");
+                Object count = result.get("count");
+                StringBuilder sb = new StringBuilder();
+                sb.append("找到 ").append(count instanceof Number n ? n.intValue() : 0).append(" 条结果");
+                if (results instanceof List<?> list) {
+                    int i = 0;
+                    for (Object item : list) {
+                        if (i++ >= 3) break;
+                        if (item instanceof Map<?, ?> m) {
+                            String name;
+                            if (m.containsKey("title")) {
+                                name = String.valueOf(m.get("title"));
+                            } else {
+                                Object raw = m.get("name");
+                                name = raw != null ? String.valueOf(raw) : "?";
+                            }
+                            sb.append(" | ").append(name);
+                        }
+                    }
+                }
+                appendCitationSources(sb, result);
+                yield sb.toString();
             }
             default -> "执行完成";
         };
+    }
+
+    /** Append "[引用来源: [1] name1, [2] name2]" to sb if result has citationMap. */
+    private void appendCitationSources(StringBuilder sb, Map<String, Object> result) {
+        Object citationMapObj = result.get("citationMap");
+        if (citationMapObj instanceof Map<?, ?> cm && !cm.isEmpty()) {
+            sb.append("\n[引用来源: ");
+            boolean first = true;
+            for (var entry : cm.entrySet()) {
+                if (!first) sb.append(", ");
+                first = false;
+                sb.append("[").append(entry.getKey()).append("] ");
+                if (entry.getValue() instanceof Map<?, ?> meta) {
+                    Object name = meta.get("resourceName");
+                    sb.append(name instanceof String s ? s : "?");
+                }
+            }
+            sb.append("]");
+        }
+    }
+
+    /** Stream step result line-by-line as step_chunk events on a background thread. */
+    private void emitStepChunks(UUID turnId, int ordinal, String tool, ToolExecution te) {
+        if (events == null) return;
+        String text = summarizeResult(tool, te.result());
+        if (text == null || text.isBlank()) return;
+        String[] lines = text.split("\n");
+        Thread.startVirtualThread(() -> {
+            for (int i = 0; i < lines.length; i++) {
+                String chunk = lines[i] + (i < lines.length - 1 ? "\n" : "");
+                publish(TurnEvent.stepChunk(turnId, ordinal, chunk));
+                try { Thread.sleep(80); } catch (InterruptedException e) { break; }
+            }
+        });
     }
 
     // ── Helpers ──
@@ -343,7 +412,17 @@ public final class AssistantOrchestrator {
     @SuppressWarnings("unchecked")
     private Object resolveValue(Object value, List<ToolExecution> previous) {
         if (value instanceof String s) {
-            return resolveString(s, previous);
+            String resolved = resolveString(s, previous);
+            // Auto-deserialize JSON arrays/objects the LLM may have stringified
+            String trimmed = resolved.trim();
+            if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+                try {
+                    return json.readValue(trimmed, Object.class);
+                } catch (Exception ignored) {
+                    // Not valid JSON — keep as string
+                }
+            }
+            return resolved;
         }
         if (value instanceof Map<?, ?> m) {
             Map<String, Object> map = new LinkedHashMap<>();
@@ -388,7 +467,7 @@ public final class AssistantOrchestrator {
     }
 
     private Object lookupRef(String ref, List<ToolExecution> previous) {
-        // Supported forms: stepN.result or stepN.result.field
+        // Supported forms: stepN.result, stepN.result.field, stepN.result.list[0].field
         if (!ref.startsWith("step") || ref.length() <= 4) return null;
         int dot = ref.indexOf('.');
         if (dot < 0) return null;
@@ -406,10 +485,52 @@ public final class AssistantOrchestrator {
         String rest = ref.substring(dot + 1);
         if (!rest.startsWith("result")) return null;
         if ("result".equals(rest)) return exec.result();
-        if (rest.startsWith("result.")) {
-            return exec.result().get(rest.substring("result.".length()));
+        if (!rest.startsWith("result.")) return null;
+
+        // Navigate the path: result.field1[index].field2...
+        String path = rest.substring("result.".length());
+        Object value = navigatePath(exec.result(), path);
+        if (value == null) {
+            LOG.warn("Unresolved step reference in plan param: {}", ref);
         }
-        return null;
+        return value;
+    }
+
+    /** Navigate a dotted path with optional array indices, e.g. "results[0].id". */
+    @SuppressWarnings("unchecked")
+    private static Object navigatePath(Object root, String path) {
+        Object current = root;
+        String[] segments = path.split("\\.");
+        for (String segment : segments) {
+            if (current == null) return null;
+            // Handle array index suffix: "results[0]" -> key="results", index=0
+            int bracketOpen = segment.indexOf('[');
+            int bracketClose = segment.indexOf(']');
+            String key;
+            Integer arrayIndex = null;
+            if (bracketOpen >= 0 && bracketClose > bracketOpen) {
+                key = segment.substring(0, bracketOpen);
+                try { arrayIndex = Integer.parseInt(segment.substring(bracketOpen + 1, bracketClose)); }
+                catch (NumberFormatException e) { /* not a valid index */ }
+            } else {
+                key = segment;
+            }
+            // Look up key
+            if (current instanceof Map<?, ?> m) {
+                current = m.get(key);
+            } else {
+                return null;
+            }
+            // Apply array index if present
+            if (arrayIndex != null && current instanceof List<?> list) {
+                if (arrayIndex >= 0 && arrayIndex < list.size()) {
+                    current = list.get(arrayIndex);
+                } else {
+                    return null;
+                }
+            }
+        }
+        return current;
     }
 
     private String write(Object value) {

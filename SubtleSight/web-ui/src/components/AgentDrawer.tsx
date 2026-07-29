@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, SideSheet, Spin, TextArea, Toast, ButtonGroup } from '@douyinfe/semi-ui';
-import { IconSend, IconAlertTriangle, IconSearch } from '@douyinfe/semi-icons';
+import { IconSend, IconAlertTriangle, IconSearch, IconGlobe, IconArticle, IconEdit, IconPlus, IconHelpCircle, IconTreeTriangleDown, IconDelete, IconFolderStroked, IconList, IconSave, IconRefresh } from '@douyinfe/semi-icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUi } from '../store/ui';
-import { postTurn, subscribeTurnEvents, confirmTurn } from '../api/agent';
+import { postTurn, subscribeTurnEvents, confirmTurn, listSessions, updateSession, deleteSession, forkSession, listTurns } from '../api/agent';
 import { QaPanel } from './QaPanel';
-import type { TurnResponse, TurnEvent } from '../types';
+import type { TurnResponse, TurnEvent, AssistantSession } from '../types';
 
 // ── State machine ──
 type DrawerState =
@@ -18,8 +18,9 @@ type DrawerState =
   | { kind: 'done' }
   | { kind: 'error'; message: string };
 
+type CitationMeta = { resourceId: string; resourceType: string; locatorJson: string; resourceName: string };
 type ResLink = { label: string; documentId?: string; fileId?: string; url?: string };
-type Message = { role: 'user' | 'agent'; text: string; tools?: string[]; confirmationRequired?: boolean; turnId?: string; kind?: 'thinking' | 'result'; links?: ResLink[] };
+type Message = { role: 'user' | 'agent'; text: string; tools?: string[]; confirmationRequired?: boolean; turnId?: string; kind?: 'thinking' | 'result'; links?: ResLink[]; citationMap?: Record<number, CitationMeta>; streaming?: boolean };
 
 // ── Derive page context from current route ──
 function usePageContext(): Record<string, unknown> {
@@ -41,6 +42,128 @@ function usePageContext(): Record<string, unknown> {
 
 const WELCOME: Message = { role: 'agent', text: '告诉我你想追踪什么、核实什么，或要建立怎样的发现视图。' };
 
+/** Build a navigation URL from a citation marker's metadata. */
+function buildCitationUrl(meta: CitationMeta): string | null {
+  try {
+    const loc = JSON.parse(meta.locatorJson || '{}');
+    const type = meta.resourceType.toUpperCase();
+    if (type === 'DOCUMENT' || type === 'DRAW_NODE') {
+      const blockId = loc.metadata?.blockId || loc.blockId;
+      const nodeId = loc.metadata?.nodeId || loc.nodeId;
+      let url = `/knowledge?documentId=${meta.resourceId}`;
+      if (blockId) url += `&blockId=${encodeURIComponent(blockId)}`;
+      if (nodeId) url += `&nodeId=${encodeURIComponent(nodeId)}`;
+      return url;
+    }
+    if (type === 'FILE') {
+      return `/knowledge?fileId=${meta.resourceId}`;
+    }
+    if (type === 'STORY') {
+      return `/stories/${meta.resourceId}`;
+    }
+    // Non-navigable types (e.g. DOCUMENTVERSION from search_local) — show name on hover only
+    if (type === 'DOCUMENTVERSION' || type === 'INTELLIGENCE') {
+      return null;
+    }
+    return `/knowledge?documentId=${meta.resourceId}`;
+  } catch {
+    return `/knowledge-editor.html#/knowledge?documentId=${meta.resourceId}`;
+  }
+}
+
+/** Navigate citations via HashRouter — no full page reload. */
+function handleCitationNav(url: string): void {
+  window.location.hash = url.startsWith('/') ? url : `/${url}`;
+}
+
+/** Extract a short title from a step's result text for collapsed display. */
+function extractStepTitle(text: string): string {
+  // Take the first meaningful line, strip markdown, limit to 60 chars
+  const firstLine = text.split('\n')[0].replace(/[*_`#]/g, '').trim();
+  return firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine || '执行完成';
+}
+
+/** Render text with clickable [N] citation markers. */
+function renderTextWithCitations(text: string, citationMap?: Record<number, CitationMeta>, navigate?: (url: string) => void): ReactNode {
+  if (!citationMap || Object.keys(citationMap).length === 0) {
+    return text;
+  }
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  const regex = /\[(\d+)\]/g;
+  let match: RegExpExecArray | null;
+  let citeIdx = 0;
+  while ((match = regex.exec(text)) !== null) {
+    const num = parseInt(match[1], 10);
+    const meta = citationMap[num];
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    if (meta) {
+      const url = buildCitationUrl(meta);
+      citeIdx++;
+      parts.push(
+        <sup
+          key={`cite-${num}-${citeIdx}`}
+          className="citation-marker"
+          title={`${meta.resourceName}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (navigate && url) {
+              navigate(url);
+            } else if (url) {
+              window.open(url, '_self');
+            }
+          }}
+        >
+          [{match[1]}]
+        </sup>
+      );
+    } else {
+      parts.push(`[${match[1]}]`);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : text;
+}
+
+/** Fetch and display context snapshot for a turn. */
+function ContextSnapshot({ sessionId, turnId }: { sessionId: string; turnId: string }): ReactNode {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => {
+    import('../api/client').then(({ get }) =>
+      get<any[]>(`/agent/sessions/${sessionId}/turns?limit=500`)
+    ).then(turns => {
+      const turn = turns.find((t: any) => t.id === turnId);
+      setData(turn || null);
+    }).catch(() => setData(null));
+  }, [sessionId, turnId]);
+  if (!data) return <Spin size="small" />;
+  return (
+    <div className="context-snapshot-inner">
+      <div className="context-snapshot-hint">此回答使用的上下文快照</div>
+      {data.planJson && (
+        <details>
+          <summary>执行计划</summary>
+          <pre className="context-json">{(() => { try { return JSON.stringify(JSON.parse(data.planJson), null, 2); } catch { return data.planJson; } })()}</pre>
+        </details>
+      )}
+      {data.contextJson && (
+        <details>
+          <summary>页面上下文</summary>
+          <pre className="context-json">{(() => { try { return JSON.stringify(JSON.parse(data.contextJson), null, 2); } catch { return data.contextJson; } })()}</pre>
+        </details>
+      )}
+      {!data.planJson && !data.contextJson && (
+        <span className="context-snapshot-empty">暂无上下文快照数据</span>
+      )}
+    </div>
+  );
+}
+
 export function AgentDrawer(): ReactNode {
   const { agentOpen, setAgentOpen } = useUi();
   const navigate = useNavigate();
@@ -50,9 +173,25 @@ export function AgentDrawer(): ReactNode {
   const [state, setState] = useState<DrawerState>({ kind: 'idle' });
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<AssistantSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [showSessionList, setShowSessionList] = useState(false);
+  const [expandedContextTurn, setExpandedContextTurn] = useState<string | null>(null);
   const sseRef = useRef<EventSource | null>(null);
   const context = usePageContext();
   const busy = state.kind === 'thinking';
+
+  // Load sessions on mount
+  const loadSessions = useCallback(async () => {
+    setSessionsLoading(true);
+    try { setSessions(await listSessions(30)); } catch { /* ignore */ }
+    setSessionsLoading(false);
+  }, []);
+  useEffect(() => { if (agentOpen) loadSessions(); }, [agentOpen, loadSessions]);
+  // Refresh sessions when sessionId changes (new session created)
+  useEffect(() => { if (sessionId && agentOpen) { const t = setTimeout(loadSessions, 500); return () => clearTimeout(t); } }, [sessionId]);
 
   // Clean up SSE on unmount
   useEffect(() => () => sseRef.current?.close(), []);
@@ -88,24 +227,55 @@ export function AgentDrawer(): ReactNode {
       }]);
     });
 
-    // step_started → skip showing internal descriptions to user
-    // (step_completed provides the actual user-facing result)
+    // step_started → create a placeholder thinking step for streaming
+    onEvent('step_started', (data) => {
+      const ordinal = data.ordinal as number ?? 0;
+      const toolName = data.toolName as string ?? '';
+      const description = data.description as string ?? '';
+      setMessages(prev => [...prev, {
+        role: 'agent',
+        text: '',
+        tools: [toolName],
+        turnId,
+        kind: 'thinking',
+      }]);
+    });
 
-    // step_completed → show result with content
+    // step_chunk → append incremental content to the last thinking step
+    onEvent('step_chunk', (data) => {
+      const chunk = data.chunk as string ?? '';
+      if (!chunk) return;
+      setMessages(prev => {
+        const copy = [...prev];
+        for (let i = copy.length - 1; i >= 0; i--) {
+          if (copy[i].kind === 'thinking' && copy[i].turnId === turnId) {
+            copy[i] = { ...copy[i], text: copy[i].text + chunk };
+            return copy;
+          }
+        }
+        return copy;
+      });
+    });
+
+    // step_completed → replace the placeholder with final formatted result
     onEvent('step_completed', (data) => {
       const success = data.success as boolean;
       const toolName = data.toolName as string ?? '';
       const result = (data.result ?? {}) as Record<string, unknown>;
       const { text: resultText, links: resultLinks } = formatToolResult(toolName, success, result);
-      setMessages(prev => [...prev, {
-        role: 'agent',
-        text: resultText,
-        tools: [toolName],
-        turnId,
-        kind: 'thinking',
-        links: resultLinks,
-      }]);
-      // Draw / document mutations → refresh knowledge queries so the UI picks up changes
+      const citationMap = (result.citationMap as Record<number, CitationMeta>) ?? undefined;
+      setMessages(prev => {
+        const copy = [...prev];
+        // Replace the last thinking step for this turn (created by step_started)
+        for (let i = copy.length - 1; i >= 0; i--) {
+          if (copy[i].kind === 'thinking' && copy[i].turnId === turnId && copy[i].tools?.[0] === toolName) {
+            copy[i] = { ...copy[i], text: resultText, links: resultLinks, citationMap };
+            return copy;
+          }
+        }
+        // Fallback: append new (backward compat)
+        return [...copy, { role: 'agent', text: resultText, tools: [toolName], turnId, kind: 'thinking', links: resultLinks, citationMap }];
+      });
       if (success && (toolName.startsWith('draw_') || toolName.startsWith('create_') || toolName.startsWith('update_'))) {
         queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] });
         queryClient.invalidateQueries({ queryKey: ['knowledge-files'] });
@@ -126,20 +296,21 @@ export function AgentDrawer(): ReactNode {
       if (!chunk) return;
       setMessages(prev => {
         const copy = [...prev];
-        // Replace the last agent message's text with the synthesis
         for (let i = copy.length - 1; i >= 0; i--) {
           if (copy[i].role === 'agent' && copy[i].turnId === turnId) {
-            copy[i] = { ...copy[i], text: chunk, kind: 'result' };
+            copy[i] = { ...copy[i], text: chunk, kind: 'result', streaming: true };
             return copy;
           }
         }
-        // Fallback: append new message
-        return [...copy, { role: 'agent', text: chunk, turnId, kind: 'result' }];
+        return [...copy, { role: 'agent', text: chunk, turnId, kind: 'result', streaming: true }];
       });
     });
 
-    // turn_completed → done
-    onEvent('turn_completed', () => setState({ kind: 'done' }));
+    // turn_completed → done, stop cursor
+    onEvent('turn_completed', () => {
+      setMessages(prev => prev.map(m => m.turnId === turnId ? { ...m, streaming: false } : m));
+      setState({ kind: 'done' });
+    });
 
     // turn_result (backward compat) — only show if it adds real content
     onEvent('turn_result', (data) => {
@@ -147,11 +318,16 @@ export function AgentDrawer(): ReactNode {
         const msg = data.message as string ?? '';
         const tools = data.tools as string[] ?? [];
         // Skip redundant "N 个步骤已执行" — step_completed already shows details
-        if (msg.matches(/^\d+\s*个步骤已执行$/)) return prev;
+        if (typeof msg === 'string' && /^\d+\s*个步骤已执行$/.test(msg)) return prev;
         const exists = prev.some(m => m.turnId === data.turnId && m.text === msg);
         if (exists) return prev;
         return [...prev, { role: 'agent', text: msg, tools, turnId: data.turnId as string }];
       });
+    });
+
+    // confirmation_expired — reset to idle gracefully
+    onEvent('confirmation_expired', () => {
+      setState({ kind: 'idle' });
     });
 
     // error
@@ -174,11 +350,37 @@ export function AgentDrawer(): ReactNode {
     switch (toolName) {
       case 'search_local': {
         const hits = r.hits as any[] | undefined;
+        const citations = r.citationMap as Record<number, CitationMeta> | undefined;
         if (!hits || hits.length === 0) return { text: '搜索完成，未找到匹配结果。', links: noLinks };
         const items = hits.slice(0, 5).map((h: any) =>
           `- **${h.title ?? '无标题'}**：${(h.snippet ?? '').slice(0, 120)}`
         ).join('\n');
-        return { text: `搜索到 ${hits.length} 条结果：\n${items}`, links: noLinks };
+        let text = `搜索到 ${hits.length} 条结果：\n${items}`;
+        if (citations && Object.keys(citations).length > 0) {
+          const refs = Object.entries(citations).slice(0, 5).map(([n, c]) =>
+            `[${n}] ${c.resourceName}`
+          ).join('\n');
+          text += `\n\n📎 引用来源 (${Object.keys(citations).length})：\n${refs}`;
+        }
+        return { text, links: noLinks };
+      }
+      case 'search_documents': {
+        const results = r.results as any[] | undefined;
+        const citations = r.citationMap as Record<number, CitationMeta> | undefined;
+        if (!results || results.length === 0) return { text: '搜索完成，未找到匹配的文档或文件。', links: noLinks };
+        const items = results.slice(0, 5).map((item: any) => {
+          const name = item.title ?? item.name ?? '无名称';
+          const typeLabel = item.type === 'folder' ? '📁' : item.type === 'file' ? '📄' : '📝';
+          return `- ${typeLabel} **${name}**`;
+        }).join('\n');
+        let text = `搜索到 ${results.length} 条结果：\n${items}`;
+        if (citations && Object.keys(citations).length > 0) {
+          const refs = Object.entries(citations).slice(0, 5).map(([n, c]) =>
+            `[${n}] ${c.resourceName}`
+          ).join('\n');
+          text += `\n\n📎 引用来源 (${Object.keys(citations).length})：\n${refs}`;
+        }
+        return { text, links: noLinks };
       }
       case 'ask_question': {
         const answer = r.answer as string | undefined;
@@ -268,6 +470,7 @@ export function AgentDrawer(): ReactNode {
   const send = async () => {
     if (!text.trim() || busy) return;
     const current = text.trim();
+    lastMessageRef.current = current;
     setMessages(v => [...v, { role: 'user', text: current }]);
     setText('');
     setState({ kind: 'thinking' });
@@ -319,7 +522,62 @@ export function AgentDrawer(): ReactNode {
   };
 
   /** Retry after error — back to idle. */
-  const retry = () => setState({ kind: 'idle' });
+  const lastMessageRef = useRef('');
+  const retry = () => {
+    const msg = lastMessageRef.current;
+    if (msg) {
+      setState({ kind: 'idle' });
+      setText(msg);
+      setTimeout(() => send(), 50);
+    } else {
+      setState({ kind: 'idle' });
+    }
+  };
+
+  // ── Session management ──
+  const newSession = () => { closeSse(); setSessionId(null); setMessages([WELCOME]); setState({ kind: 'idle' }); setShowSessionList(false); };
+
+  const switchSession = async (sid: string) => {
+    closeSse(); setSessionId(sid); setShowSessionList(false); setState({ kind: 'idle' });
+    try {
+      const turns = await listTurns(sid);
+      const msgs: Message[] = [WELCOME];
+      for (const t of turns) {
+        if (t.role === 'USER') {
+          msgs.push({ role: 'user', text: t.content, turnId: t.id });
+        } else {
+          msgs.push({ role: 'agent', text: t.content, turnId: t.id, kind: 'result' });
+        }
+      }
+      setMessages(msgs);
+    } catch { setMessages([WELCOME]); }
+  };
+
+  const startRename = (sid: string, currentTitle: string) => { setEditingSessionId(sid); setEditTitle(currentTitle); };
+  const commitRename = async (sid: string) => {
+    if (!editTitle.trim()) { setEditingSessionId(null); return; }
+    try { await updateSession(sid, editTitle.trim()); setSessions(v => v.map(s => s.id === sid ? { ...s, title: editTitle.trim() } : s)); } catch { /* ignore */ }
+    setEditingSessionId(null);
+  };
+
+  const removeSession = async (sid: string) => {
+    try { await deleteSession(sid); setSessions(v => v.filter(s => s.id !== sid)); if (sid === sessionId) newSession(); } catch { /* ignore */ }
+  };
+
+  const branchFromTurn = async (turnId: string) => {
+    if (!sessionId) return;
+    try {
+      const { sessionId: newId, history } = await forkSession(sessionId, turnId);
+      const msgs: Message[] = [WELCOME];
+      for (const h of history) {
+        if (h.role === 'USER') msgs.push({ role: 'user', text: h.content });
+        else msgs.push({ role: 'agent', text: h.content, kind: 'result' });
+      }
+      setSessionId(newId); setMessages(msgs); setState({ kind: 'idle' });
+      Toast.success('已从该消息创建分支');
+      loadSessions();
+    } catch (e) { Toast.error('分支失败'); }
+  };
 
   // ── Render helpers ──
   const renderConfirmationCard = () => {
@@ -370,13 +628,34 @@ export function AgentDrawer(): ReactNode {
     );
   };
 
-  // Track which turns have their thinking chain collapsed
-  const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
-  const toggleCollapse = (turnId: string) => setCollapsedTurns(prev => {
+  // Thinking chain body visibility per turn (default: visible)
+  const [collapsedThinkingChains, setCollapsedThinkingChains] = useState<Set<string>>(new Set());
+  const toggleThinkingChain = (turnId: string) => setCollapsedThinkingChains(prev => {
     const next = new Set(prev);
     if (next.has(turnId)) next.delete(turnId); else next.add(turnId);
     return next;
   });
+
+  // Tool icon mapping using Semi UI SVG icons
+  const toolIcon = (tool: string): ReactNode => {
+    switch (tool) {
+      case 'search_local': return <IconSearch size="small" />;
+      case 'discover_web': return <IconGlobe size="small" />;
+      case 'search_documents': return <IconArticle size="small" />;
+      case 'create_document': return <IconPlus size="small" />;
+      case 'create_report': return <IconArticle size="small" />;
+      case 'update_document': return <IconEdit size="small" />;
+      case 'ask_question': return <IconHelpCircle size="small" />;
+      case 'start_research': return <IconTreeTriangleDown size="small" />;
+      case 'draw_diagram': case 'draw_add_node': return <IconPlus size="small" />;
+      case 'draw_add_edge': return <IconTreeTriangleDown size="small" />;
+      case 'add_watch_target': return <IconGlobe size="small" />;
+      case 'delete': return <IconDelete size="small" />;
+      case 'list_folders': return <IconFolderStroked size="small" />;
+      case 'list_watch_targets': case 'list_watch_changes': return <IconList size="small" />;
+      default: return <IconArticle size="small" />;
+    }
+  };
 
   const renderMessages = () => {
     // Group messages by turn: each turn has thinking steps + optional result
@@ -419,28 +698,37 @@ export function AgentDrawer(): ReactNode {
               </div>
             )}
 
-            {/* Thinking chain — collapsible */}
+            {/* Thinking chain — per-step collapsible cards */}
             {g.thinking.length > 0 && (
               <div className="agent-thinking-chain">
                 <button
                   className="agent-thinking-toggle"
-                  onClick={() => g.turnId && toggleCollapse(g.turnId)}
+                  onClick={() => g.turnId && toggleThinkingChain(g.turnId)}
                 >
-                  <span className={`agent-chevron ${g.turnId && !collapsedTurns.has(g.turnId) ? 'expanded' : ''}`}>▸</span>
+                  <span className={`agent-chevron ${g.turnId && !collapsedThinkingChains.has(g.turnId) ? 'expanded' : ''}`}>▸</span>
                   <span>
                     {g.result ? '推理过程' : '执行详情'}
-                    <span className="agent-thinking-count">（{g.thinking.length} 步）</span>
+                    <span className="agent-thinking-count">{g.thinking.length} 步</span>
                   </span>
                 </button>
-                {g.turnId && !collapsedTurns.has(g.turnId) && (
+                {g.turnId && !collapsedThinkingChains.has(g.turnId) && (
                   <div className="agent-thinking-body">
-                    {g.thinking.map((m, mi) => (
-                      <div key={mi} className="chat agent thinking-step">
-                        <p>{m.text}</p>
-                        {renderLinks(m)}
-                        {m.tools?.map(t => <code key={t}>{t}</code>)}
-                      </div>
-                    ))}
+                    {g.thinking.map((m, mi) => {
+                      const toolName = m.tools?.[0] ?? '';
+                      return (
+                        <div key={mi} className="thinking-step-card">
+                          <div className="step-card-header">
+                            <span className="step-card-icon">{toolIcon(toolName)}</span>
+                            <span className="step-card-title">{extractStepTitle(m.text)}</span>
+                          </div>
+                          <div className="step-card-body">
+                            <p>{renderTextWithCitations(m.text, m.citationMap, handleCitationNav)}</p>
+                            {renderLinks(m)}
+                            {m.tools?.map(t => <code key={t}>{t}</code>)}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -449,11 +737,25 @@ export function AgentDrawer(): ReactNode {
             {/* Result — always visible */}
             {g.result && (
               <div className="chat agent result-bubble">
-                <p>{g.result.text}</p>
+                <p>
+                  {renderTextWithCitations(g.result.text, g.result.citationMap, handleCitationNav)}
+                  {g.result.streaming && <span className="typing-cursor">|</span>}
+                </p>
                 {renderLinks(g.result)}
                 {g.result.tools?.map(t => <code key={t}>{t}</code>)}
                 {g.result.confirmationRequired && (
                   <span className="agent-tag">⚠ 需确认</span>
+                )}
+                {g.result.turnId && (
+                  <div className="result-meta-actions">
+                    {sessionId && <button className="result-meta-btn" title="从此消息分支继续" onClick={() => branchFromTurn(g.result!.turnId!)}>↳ 分支</button>}
+                    <button className="result-meta-btn" title="查看上下文快照" onClick={() => setExpandedContextTurn(expandedContextTurn === g.result!.turnId ? null : g.result!.turnId!)}>📋 上下文</button>
+                  </div>
+                )}
+                {g.result.turnId && expandedContextTurn === g.result.turnId && sessionId && (
+                  <div className="context-snapshot">
+                    <ContextSnapshot sessionId={sessionId} turnId={g.result.turnId} />
+                  </div>
                 )}
               </div>
             )}
@@ -466,26 +768,18 @@ export function AgentDrawer(): ReactNode {
   return (
     <SideSheet
       title={
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Button size="small" type={showSessionList ? 'primary' : 'tertiary'} onClick={() => setShowSessionList(v => !v)}>☰</Button>
           <span>问 SubtleSight</span>
-          <ButtonGroup size="small" style={{ marginLeft: 8 }}>
-            <Button
-              type={mode === 'chat' ? 'primary' : 'tertiary'}
-              size="small"
-              onClick={() => setMode('chat')}
-            >对话</Button>
-            <Button
-              type={mode === 'qa' ? 'primary' : 'tertiary'}
-              size="small"
-              icon={<IconSearch />}
-              onClick={() => setMode('qa')}
-            >问答</Button>
+          <ButtonGroup size="small" style={{ marginLeft: 4 }}>
+            <Button type={mode === 'chat' ? 'primary' : 'tertiary'} size="small" onClick={() => setMode('chat')}>对话</Button>
+            <Button type={mode === 'qa' ? 'primary' : 'tertiary'} size="small" icon={<IconSearch />} onClick={() => setMode('qa')}>问答</Button>
           </ButtonGroup>
         </div>
       }
       visible={agentOpen}
-      onCancel={() => { closeSse(); setAgentOpen(false); }}
-      width={520}
+      onCancel={() => { closeSse(); setTimeout(() => setAgentOpen(false), 0); }}
+      width={showSessionList ? 820 : 520}
       footer={mode === 'qa' ? undefined : (
         <div className="agent-compose">
           <TextArea
@@ -502,6 +796,37 @@ export function AgentDrawer(): ReactNode {
         </div>
       )}
     >
+      <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+        {showSessionList && (
+          <div className="session-list-panel">
+            <div className="session-list-header">
+              <Button size="small" type="primary" onClick={newSession}>+ 新对话</Button>
+            </div>
+            <div className="session-list-scroll">
+              {sessionsLoading ? <div style={{ padding: 20, textAlign: 'center' }}><Spin /></div> :
+               sessions.length === 0 ? <div className="session-list-empty">暂无历史对话</div> :
+               sessions.map(s => (
+                <div key={s.id} className={`session-list-item${s.id === sessionId ? ' active' : ''}`} onClick={() => switchSession(s.id)}>
+                  <div className="session-item-main">
+                    {editingSessionId === s.id ? (
+                      <input className="session-edit-input" value={editTitle} onChange={e => setEditTitle(e.target.value)}
+                        onBlur={() => commitRename(s.id)} onKeyDown={e => { if (e.key === 'Enter') commitRename(s.id); if (e.key === 'Escape') setEditingSessionId(null); }}
+                        onClick={e => e.stopPropagation()} autoFocus />
+                    ) : (
+                      <span className="session-item-title">{s.title}</span>
+                    )}
+                    <span className="session-item-time">{new Date(s.updatedAt).toLocaleDateString('zh-CN')}</span>
+                  </div>
+                  <div className="session-item-actions" onClick={e => e.stopPropagation()}>
+                    <button title="重命名" onClick={() => startRename(s.id, s.title)}>✎</button>
+                    <button title="删除" onClick={() => removeSession(s.id)}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
       {mode === 'qa' ? (
         <QaPanel />
       ) : (
@@ -525,6 +850,8 @@ export function AgentDrawer(): ReactNode {
           )}
         </>
       )}
+        </div>
+      </div>
     </SideSheet>
   );
 }

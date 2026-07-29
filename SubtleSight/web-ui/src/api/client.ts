@@ -44,6 +44,8 @@ export const put = <T>(path: string, body?: unknown): Promise<T> =>
   api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) } as RequestInit);
 
 export const del = <T>(path: string): Promise<T> => api<T>(path, { method: 'DELETE' } as RequestInit);
+export const patch = <T>(path: string, body?: unknown): Promise<T> =>
+  api<T>(path, { method: 'PATCH', headers: body != null ? { 'Content-Type': 'application/json' } : undefined, body: body != null ? JSON.stringify(body) : undefined } as RequestInit);
 
 /** 知识库文件批量上传：所有文件在一个 XHR 请求中提交，实时进度 */
 export function uploadKnowledgeFiles(

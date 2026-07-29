@@ -29,6 +29,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +67,38 @@ public class ApiController {
     @PostMapping("/sources/collect-real") SubtleSightWorkflowService.CollectReport collectRealSources(@RequestParam(defaultValue="8")int maxSources,@RequestParam(defaultValue="8")int maxItems){return workflow.collectRealSources(maxSources,maxItems);}
     @PostMapping(value="/documents/upload",consumes=MediaType.MULTIPART_FORM_DATA_VALUE) SubtleSightWorkflowService.IngestResult upload(@RequestParam UUID sourceId,@RequestPart MultipartFile file)throws Exception{return workflow.ingest(sourceId,"https://local.upload/"+java.net.URLEncoder.encode(file.getOriginalFilename()==null?"document":file.getOriginalFilename(),StandardCharsets.UTF_8),file.getContentType()==null?"application/octet-stream":file.getContentType(),file.getBytes(),Instant.now());}
     @PostMapping("/documents/ingest") SubtleSightWorkflowService.IngestResult ingest(@Valid @RequestBody IngestRequest request){return workflow.ingest(request.sourceId(),request.url(),request.mediaType(),request.content().getBytes(StandardCharsets.UTF_8),request.observedAt());}
+
+    @GetMapping("/stories") List<Story> stories(@RequestParam(defaultValue="100")int limit){return repository.listStories(limit);}
+    @GetMapping("/stories/{id}") Map<String,Object> storyDetail(@PathVariable UUID id){
+        Story story=repository.findStory(id).orElse(null);
+        if(story==null) throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND,"Story not found");
+        Map<String,Object> detail=new LinkedHashMap<>();
+        detail.put("story",story);
+        // Enrich timeline with document version details
+        List<Map<String,Object>> timeline=new ArrayList<>();
+        for(StoryMember member:repository.storyMembers(id)){
+            Map<String,Object> item=new LinkedHashMap<>();
+            item.put("storyId",member.storyId().toString());
+            item.put("documentVersionId",member.documentVersionId().toString());
+            item.put("role",member.role());
+            item.put("sourceFamily",member.sourceFamily());
+            item.put("similarity",member.similarity());
+            item.put("addedAt",member.addedAt().toString());
+            repository.findDocumentVersion(member.documentVersionId()).ifPresent(dv->{
+                item.put("title",dv.title());
+                item.put("summary",dv.summary()!=null?dv.summary():"");
+                item.put("text",dv.text()!=null?dv.text():"");
+                item.put("canonicalUrl",dv.canonicalUrl()!=null?dv.canonicalUrl():"");
+                item.put("publishedAt",dv.publishedAt()!=null?dv.publishedAt().toString():"");
+                item.put("author",dv.author()!=null?dv.author():"");
+                item.put("language",dv.language()!=null?dv.language():"");
+            });
+            timeline.add(item);
+        }
+        detail.put("timeline",timeline);
+        detail.put("interactions",List.of());
+        return detail;
+    }
 
     @GetMapping("/feed/{view}") List<FeedItem> feed(@PathVariable ViewType view,@RequestParam(required=false)UUID savedViewId,@RequestParam(defaultValue="30")int limit,@RequestParam(required=false)String cursor){return facade.feed(view,savedViewId,limit,cursor);}
 

@@ -15,6 +15,7 @@ public final class AssistantPorts {
         AssistantSession createSession(String title);
         Optional<AssistantSession> getSession(UUID sessionId);
         List<AssistantSession> listSessions(int limit, int offset);
+        void updateSessionTitle(UUID sessionId, String title);
         void archiveSession(UUID sessionId);
 
         // ── Turns ──

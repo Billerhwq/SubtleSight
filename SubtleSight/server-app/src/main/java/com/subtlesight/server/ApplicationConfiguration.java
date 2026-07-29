@@ -168,7 +168,8 @@ public class ApplicationConfiguration {
             }
             return toolRegistry.execute(tool, args);
         };
-        return new WebAgentService(executor, assistantRepository, orchestrator);
+        var threadPool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        return new WebAgentService(executor, assistantRepository, orchestrator, threadPool);
     }
     @Bean WatchlistScheduler watchlistScheduler(IntelligenceRepository repository, WatchlistService watchlistService, ObjectMapper json, Clock clock, SseHub sseHub){
         return new WatchlistScheduler(repository, watchlistService, json, clock, (targetId, data) -> sseHub.publish("watchlist_changed", data));

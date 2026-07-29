@@ -134,8 +134,8 @@ export function KnowledgePage(): ReactNode {
   const tree = useMemo(() => buildTree(folders), [folders]);
   const folderMap = useMemo(() => new Map(folders.map(f => [f.id, f])), [folders]);
 
-  // Handle URL search params — open document / preview file
-  const [searchParams] = useSearchParams();
+  // Handle URL search params — open document / preview file, then clear params
+  const [searchParams, setSearchParams] = useSearchParams();
   const lastOpenedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -161,6 +161,14 @@ export function KnowledgePage(): ReactNode {
         openPreview({ kind: 'file', file });
       }
     }
+    // Clear params to prevent re-opening on refresh
+    const next = new URLSearchParams(searchParams);
+    next.delete('documentId');
+    next.delete('fileId');
+    next.delete('blockId');
+    next.delete('nodeId');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (setSearchParams as any)(next, { replace: true });
   }, [searchParams, documents, allFiles]);
 
   const invalidate = () => {
@@ -179,7 +187,7 @@ export function KnowledgePage(): ReactNode {
   const createDocument = useMutation({
     mutationFn: (folderId?: string | null) => post<KnowledgeDocument>('/knowledge/documents', {
       folderId: folderId !== undefined ? folderId : current,
-      title: '无标题文档',
+      title: `新文档 ${new Date().toLocaleDateString('zh-CN')}`,
       contentHtml: '<p></p>',
       drawingJson: '{"nodes":[],"edges":[]}',
     }),
@@ -650,6 +658,8 @@ export function KnowledgePage(): ReactNode {
           <KnowledgeEditorPage
             embedded
             documentId={editingDocumentId}
+            highlightBlockId={searchParams.get('blockId') ?? undefined}
+            highlightNodeId={searchParams.get('nodeId') ?? undefined}
             onBack={closeEdit}
           />
         </div>
@@ -833,7 +843,7 @@ export function KnowledgePage(): ReactNode {
                       <div className="kb-preview-doc-paper">
                         <div
                           className="kb-preview-doc-body"
-                          dangerouslySetSetInnerHTML={{ __html: previewItem.document.contentHtml || '<p style="color:var(--text-3)">空白文档</p>' }}
+                          dangerouslySetInnerHTML={{ __html: previewItem.document.contentHtml || '<p style="color:var(--text-3)">空白文档</p>' }}
                         />
                       </div>
                     </div>

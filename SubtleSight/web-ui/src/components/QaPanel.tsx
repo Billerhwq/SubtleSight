@@ -85,8 +85,8 @@ export function QaPanel(): ReactNode {
   const handleViewCitation = (c: QaCitation) => {
     const resourceType = c.resourceType?.toUpperCase();
     const resourceId = c.resourceId;
-    // Close the agent drawer first so the knowledge page is visible
-    setAgentOpen(false);
+    // Defer closing the agent drawer to avoid React 19 synchronous unmount warning
+    setTimeout(() => setAgentOpen(false), 0);
     try {
       const loc = JSON.parse(c.locatorJson || '{}');
       // Use setTimeout to let the drawer close animation finish before navigating

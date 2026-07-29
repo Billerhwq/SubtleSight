@@ -46,6 +46,18 @@ public final class KeywordPlanner implements Planner {
             steps.add(new PlanStep(1, "search_local", "搜索相关资料",
                     Map.of("query", message)));
             steps.add(new PlanStep(2, "start_research", "启动深度研究", Map.of()));
+        } else if (tool != null && tool.equals("delete")) {
+            // Delete: if currentDocId is in context, use it directly; otherwise search first
+            String docId = stringFromContext(context, "currentDocId", "documentId");
+            if (docId != null) {
+                steps.add(new PlanStep(1, "delete", "删除当前文档",
+                        Map.of("resourceId", docId)));
+            } else {
+                steps.add(new PlanStep(1, "search_documents", "搜索匹配的文档",
+                        Map.of("keyword", message)));
+                steps.add(new PlanStep(2, "delete", "删除搜索到的文档",
+                        Map.of("resourceId", "${step1.result.results[0].id}")));
+            }
         } else {
             String desc = switch (tool) {
                 case "search_local" -> "搜索情报库";
@@ -113,6 +125,13 @@ public final class KeywordPlanner implements Planner {
             }
             case "get_document" -> Map.of();
             case "add_watch_target" -> Map.of("name", message, "expression", message);
+            case "delete" -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                // Use message as resourceId fallback; the tool will validate and return a helpful error if invalid
+                m.put("resourceId", message);
+                if (docId != null) m.put("resourceId", docId);
+                yield m;
+            }
             default -> Map.of();
         };
     }
@@ -130,7 +149,7 @@ public final class KeywordPlanner implements Planner {
         String m = message.toLowerCase(Locale.ROOT);
         // HIGH risk first
         if (hasAny(m, "删除", "delete", "移除", "remove")) return "delete";
-        if (hasAny(m, "发布", "publish")) return "request_publish";
+        if (hasAny(m, "发布报告", "请求发布", "publish report", "request publish")) return "request_publish";
         // Denied tools — must be caught and denied by policy
         if ((hasAny(m, "修改") && hasAny(m, "provider", "ai", "设置", "模型", "密钥", "api", "key"))
                 || hasAny(m, "override setting", "modify provider"))

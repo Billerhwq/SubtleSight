@@ -29,10 +29,12 @@ public final class LlmPlanner implements Planner {
     private final Set<String> highRiskTools;
     private final ObjectMapper json = new ObjectMapper();
 
-    // High-risk keywords that should bypass LLM and go straight to keyword routing
+    // High-risk keywords that should bypass LLM and go straight to keyword routing.
+    // Note: "delete"/"删除"/"移除" are intentionally NOT bypassed here — the LLM needs to
+    // plan a search-before-delete flow. Safety is enforced by ActionPolicy.requireConfirm().
     private static final Set<String> HIGH_RISK_KEYWORDS = Set.of(
-            "发布", "publish", "删除", "delete", "移除", "remove", "修改配置", "覆盖",
-            "修改 provider", "修改 ai", "override setting", "modify provider", "modify setting");
+            "修改配置", "覆盖", "修改 provider", "修改 ai",
+            "override setting", "modify provider", "modify setting");
 
     public LlmPlanner(AiProvider ai, Planner fallback, ToolRegistry registry) {
         this.ai = ai;
@@ -156,10 +158,9 @@ public final class LlmPlanner implements Planner {
     static boolean shouldUseKeywordRouting(String message) {
         String m = message.toLowerCase(Locale.ROOT);
 
-        // High-risk ops — must go through keyword planner for confirmation flow
-        if (m.contains("delete") || m.contains("删除") || m.contains("移除")
-                || m.contains("publish") || m.contains("发布")
-                || m.contains("modify provider") || m.contains("修改"))
+        // High-risk ops that don't need search-before-act — keyword planner is sufficient
+        // (delete and publish go through LLM for proper planning; safety via ActionPolicy)
+        if (m.contains("modify provider") || m.contains("修改配置"))
             return true;
 
         // Simple, single-intent tool mappings (no compound keywords present)

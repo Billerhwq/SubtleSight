@@ -62,6 +62,12 @@ public final class SqliteAssistantRepository implements Repository {
     }
 
     @Override
+    public void updateSessionTitle(UUID sessionId, String title) {
+        jdbc.update("UPDATE assistant_sessions SET title=?,updated_at=? WHERE id=?",
+                title, clock.instant().toString(), sessionId.toString());
+    }
+
+    @Override
     public void archiveSession(UUID sessionId) {
         jdbc.update("UPDATE assistant_sessions SET archived=1,updated_at=? WHERE id=?",
                 clock.instant().toString(), sessionId.toString());

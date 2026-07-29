@@ -10,7 +10,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -28,12 +30,25 @@ public class SecurityConfig {
         http.authorizeHttpRequests(auth->auth.anyRequest().permitAll())
                 .csrf(c->c.csrfTokenRepository(csrf)
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()))
-                .addFilterBefore(new OriginValidationFilter(origins),SecurityContextHolderFilter.class)
+                .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
+                .addFilterBefore(new OriginValidationFilter(origins), SecurityContextHolderFilter.class)
                 .headers(headers->headers.frameOptions(fo->fo.sameOrigin()))
                 .formLogin(form->form.disable())
                 .logout(logout->logout.disable());
         return http.build();
     }
+    /** Eagerly loads the CSRF token on every request so CookieCsrfTokenRepository sets the cookie. */
+    static final class CsrfCookieFilter extends OncePerRequestFilter {
+        @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                                    FilterChain chain) throws ServletException, IOException {
+            CsrfToken token = (CsrfToken) request.getAttribute(CsrfToken.class.getName());
+            if (token != null && token.getToken() != null) {
+                // Token loaded — CookieCsrfTokenRepository.saveToken() will set the cookie
+            }
+            chain.doFilter(request, response);
+        }
+    }
+
     static final class OriginValidationFilter extends OncePerRequestFilter{
         private final Set<String> allowed;
         private final boolean enabled;
@@ -44,8 +59,15 @@ public class SecurityConfig {
         @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain)throws ServletException,IOException{
             if(!enabled||!Set.of("POST","PUT","PATCH","DELETE").contains(request.getMethod())){chain.doFilter(request,response);return;}
             String origin=request.getHeader("Origin");
-            if(origin!=null&&!allowed.contains(normalize(origin))){response.sendError(403,"origin is not allowed");return;}
+            if(origin!=null&&!isOriginAllowed(origin)){response.sendError(403,"origin is not allowed");return;}
             chain.doFilter(request,response);
+        }
+        private boolean isOriginAllowed(String origin) {
+            String normalized = normalize(origin);
+            if (allowed.contains(normalized)) return true;
+            // Also try without port, so "http://localhost" matches any localhost port
+            String withoutPort = normalized.replaceFirst(":\\d+$","");
+            return allowed.contains(withoutPort);
         }
         private String normalize(String origin){try{URI u=URI.create(origin);int port=u.getPort();return u.getScheme()+"://"+u.getHost()+(port<0?"":":"+port);}catch(Exception e){return "invalid";}}
     }

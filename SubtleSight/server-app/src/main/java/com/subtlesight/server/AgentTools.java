@@ -4,6 +4,9 @@ import com.subtlesight.agent.tools.DrawToolHelper;
 import com.subtlesight.agent.tools.annotations.AgentTool;
 import com.subtlesight.agent.tools.annotations.AgentTool.RiskLevel;
 import com.subtlesight.agent.tools.annotations.ToolParam;
+import com.subtlesight.application.Ports.AiProvider;
+import com.subtlesight.application.Ports.AiProvider.AiRequest;
+import com.subtlesight.application.Ports.AiProvider.AiResult;
 import com.subtlesight.application.SubtleSightFacade;
 import com.subtlesight.application.Ports.IntelligenceRepository;
 import com.subtlesight.domain.Models.*;
@@ -17,6 +20,8 @@ import com.subtlesight.qa.TraceableQaService;
 import com.subtlesight.report.ReportService;
 import com.subtlesight.research.DeepResearchService;
 import com.subtlesight.watchlist.WatchlistService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -29,6 +34,7 @@ import java.util.*;
  */
 @Component
 public class AgentTools {
+    private static final Logger LOG = LoggerFactory.getLogger(AgentTools.class);
 
     private final SubtleSightFacade facade;
     private final WatchlistService watchlist;
@@ -38,10 +44,11 @@ public class AgentTools {
     private final IntelligenceRepository repo;
     private final TraceableQaService qa;
     private final KnowledgeService knowledge;
+    private final AiProvider ai;
 
     public AgentTools(SubtleSightFacade facade, WatchlistService watchlist, ReportService reports,
                       DeepResearchService research, DurableJobQueue jobs, TraceableQaService qa,
-                      KnowledgeService knowledge) {
+                      KnowledgeService knowledge, AiProvider ai) {
         this.facade = facade;
         this.watchlist = watchlist;
         this.reports = reports;
@@ -50,6 +57,7 @@ public class AgentTools {
         this.repo = facade.repository();
         this.qa = qa;
         this.knowledge = knowledge;
+        this.ai = ai;
     }
 
     @AgentTool(name = "search_local", description = "搜索本地情报库，返回匹配的文档和故事")
@@ -58,8 +66,32 @@ public class AgentTools {
             @ToolParam(name = "limit", description = "返回结果数量上限", required = false) Integer limit) {
         int lim = limit != null && limit > 0 ? Math.min(limit, 100) : 10;
         var results = facade.searchLocal(query, Set.of(), lim);
-        return Map.<String, Object>of("hits",
-                results.stream().map(r -> Map.of("title", r.title(), "snippet", r.snippet(), "score", r.score())).toList());
+        var hits = results.stream().map(r -> {
+            var m = new LinkedHashMap<String, Object>();
+            m.put("id", r.id().toString());
+            m.put("type", r.type());
+            m.put("title", r.title());
+            m.put("snippet", r.snippet());
+            m.put("score", r.score());
+            return (Map<String, Object>) m;
+        }).toList();
+
+        Map<Integer, Map<String, String>> citationMap = new LinkedHashMap<>();
+        int idx = 1;
+        for (var hit : hits) {
+            String type = (String) hit.get("type");
+            Map<String, String> meta = new LinkedHashMap<>();
+            meta.put("resourceId", (String) hit.get("id"));
+            meta.put("resourceType", type != null ? type.toUpperCase() : "INTELLIGENCE");
+            meta.put("locatorJson", "{}");
+            meta.put("resourceName", (String) hit.get("title"));
+            citationMap.put(idx++, meta);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("hits", hits);
+        result.put("citationMap", citationMap);
+        return result;
     }
 
     @AgentTool(name = "discover_web", description = "搜索全网公开资料，返回发现结果")
@@ -139,6 +171,7 @@ public class AgentTools {
             @ToolParam(name = "researchId", description = "关联的研究 ID", required = false) String researchId) {
         String t = type != null ? type : "summary";
         try {
+            title = sanitizeTitle(title);
             UUID rid = researchId != null ? UUID.fromString(researchId) : UUID.randomUUID();
             var rpt = reports.create(rid, t, title);
             return Map.<String, Object>of("reportId", rpt.id().toString(), "title", rpt.title(), "type", t);
@@ -161,8 +194,31 @@ public class AgentTools {
 
     @AgentTool(name = "delete", description = "删除指定资源（需要用户确认）", risk = RiskLevel.HIGH)
     public Map<String, Object> deleteResource(
-            @ToolParam(name = "resourceId", description = "要删除的资源 ID") String resourceId) {
-        return Map.<String, Object>of("deleted", resourceId, "message", "资源已删除");
+            @ToolParam(name = "resourceId", description = "要删除的资源 ID（文档、文件或文件夹的 UUID）") String resourceId) {
+        try {
+            UUID id = UUID.fromString(resourceId);
+            // Try as document first, then file, then folder
+            try {
+                knowledge.deleteDocument(id);
+                return Map.<String, Object>of("deleted", resourceId, "type", "document",
+                        "message", "文档已删除");
+            } catch (Exception ignored) { /* not a document */ }
+            try {
+                knowledge.delete(id);
+                return Map.<String, Object>of("deleted", resourceId, "type", "file",
+                        "message", "文件已删除");
+            } catch (Exception ignored) { /* not a file */ }
+            try {
+                knowledge.deleteFolder(id);
+                return Map.<String, Object>of("deleted", resourceId, "type", "folder",
+                        "message", "文件夹已删除");
+            } catch (Exception ignored) { /* not a folder */ }
+            return Map.<String, Object>of("error",
+                    "未找到资源 " + resourceId + "，请确认资源 ID 是否正确");
+        } catch (IllegalArgumentException e) {
+            return Map.<String, Object>of("error",
+                    "无效的资源 ID 格式: " + resourceId + "，请提供有效的 UUID");
+        }
     }
 
     // ── QA tool ──
@@ -179,19 +235,57 @@ public class AgentTools {
         return Map.<String, Object>of("folders", list, "count", folders.size());
     }
 
-    @AgentTool(name = "search_documents", description = "按关键词搜索知识库文档和文件")
+    @AgentTool(name = "search_documents", description = "按关键词搜索知识库文档、文件和文件夹")
     public Map<String, Object> searchDocuments(
             @ToolParam(name = "keyword", description = "搜索关键词") String keyword) {
         var result = knowledge.search(keyword);
-        var docs = result.folders().stream().map(f -> Map.<String, Object>of(
-                "type", "folder", "id", f.id().toString(), "name", f.name(), "path", f.path()
-        )).collect(java.util.stream.Collectors.toList());
-        var files = result.files().stream().map(f -> Map.<String, Object>of(
-                "type", "file", "id", f.id().toString(), "name", f.name(), "ext", f.ext(), "path", f.path()
-        )).collect(java.util.stream.Collectors.toList());
-        List<Map<String, Object>> all = new ArrayList<>(docs);
-        all.addAll(files);
-        return Map.<String, Object>of("results", all, "count", all.size());
+        var matchedFolders = result.folders().stream().map(f -> {
+            var m = new LinkedHashMap<String, Object>();
+            m.put("type", "folder"); m.put("id", f.id().toString());
+            m.put("name", f.name()); m.put("path", f.path());
+            return (Map<String, Object>) m;
+        }).collect(java.util.stream.Collectors.toList());
+        var matchedFiles = result.files().stream().map(f -> {
+            var m = new LinkedHashMap<String, Object>();
+            m.put("type", "file"); m.put("id", f.id().toString());
+            m.put("name", f.name()); m.put("ext", f.ext()); m.put("path", f.path());
+            return (Map<String, Object>) m;
+        }).collect(java.util.stream.Collectors.toList());
+
+        // Also search documents by title
+        String lower = keyword.toLowerCase(Locale.ROOT);
+        var matchedDocs = knowledge.documents(null, true).stream()
+                .filter(d -> d.title().toLowerCase(Locale.ROOT).contains(lower))
+                .map(d -> {
+                    var m = new LinkedHashMap<String, Object>();
+                    m.put("type", "document"); m.put("id", d.id().toString());
+                    m.put("title", d.title()); m.put("version", d.version());
+                    m.put("folderId", d.folderId() == null ? "" : d.folderId().toString());
+                    return (Map<String, Object>) m;
+                })
+                .collect(java.util.stream.Collectors.toList());
+
+        List<Map<String, Object>> all = new ArrayList<>(matchedFolders);
+        all.addAll(matchedFiles);
+        all.addAll(matchedDocs);
+
+        Map<Integer, Map<String, String>> citationMap = new LinkedHashMap<>();
+        int idx = 1;
+        for (var item : all) {
+            Map<String, String> meta = new LinkedHashMap<>();
+            meta.put("resourceId", (String) item.get("id"));
+            meta.put("resourceType", ((String) item.get("type")).toUpperCase());
+            meta.put("locatorJson", "{}");
+            meta.put("resourceName", item.containsKey("title")
+                    ? (String) item.get("title") : (String) item.get("name"));
+            citationMap.put(idx++, meta);
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("results", all);
+        response.put("count", all.size());
+        response.put("citationMap", citationMap);
+        return response;
     }
 
     @AgentTool(name = "get_document", description = "获取文档的完整内容和元数据")
@@ -221,9 +315,14 @@ public class AgentTools {
             @ToolParam(name = "folderId", description = "目标文件夹 ID（可选，默认根目录）", required = false) String folderId) {
         try {
             UUID fid = parseFolderId(folderId);
-            var doc = knowledge.createDocument(fid, title,
-                    contentHtml != null ? contentHtml : "<h2>" + title + "</h2><p></p>",
-                    null);
+            title = sanitizeTitle(title);
+            String docContent = contentHtml != null ? contentHtml : "<h2>" + title + "</h2><p></p>";
+            var doc = knowledge.createDocument(fid, title, docContent, null);
+            // Generate AI title asynchronously
+            if (ai != null) {
+                String finalTitle = title;
+                Thread.startVirtualThread(() -> autoTitle(doc.id(), finalTitle, docContent));
+            }
             return Map.<String, Object>of(
                     "id", doc.id().toString(),
                     "title", doc.title(),
@@ -430,6 +529,41 @@ public class AgentTools {
 
     // ── Helpers ──
 
+    /** Use AI to generate a concise title from document content, then update. */
+    private void autoTitle(UUID docId, String fallbackTitle, String contentHtml) {
+        try {
+            String plainText = contentHtml.replaceAll("<[^>]+>", " ")
+                    .replaceAll("\\s+", " ").trim();
+            if (plainText.length() < 20) return;
+            String excerpt = plainText.length() > 600 ? plainText.substring(0, 600) : plainText;
+            AiRequest req = new AiRequest("title",
+                    "根据文档内容生成一个简洁的中文标题（不超过20个字），只输出标题，不要引号和其他内容。",
+                    "文档内容：" + excerpt, null, 60, 0.3);
+            AiResult result = ai.complete(req);
+            String aiTitle = result.content();
+            if (aiTitle != null && !aiTitle.isBlank()) {
+                aiTitle = aiTitle.replaceAll("[\"']", "").strip();
+                if (aiTitle.length() > 30) aiTitle = aiTitle.substring(0, 30);
+                // Get current version to avoid conflict
+                var doc = knowledge.requireDocument(docId);
+                knowledge.updateDocument(docId, doc.folderId(), aiTitle, doc.contentHtml(),
+                        doc.drawingJson(), doc.version(), "AI 自动命名");
+            }
+        } catch (Exception e) {
+            LOG.debug("AI title generation failed for doc {}: {}", docId, e.getMessage());
+        }
+    }
+
+    /** Trim title to a concise length, removing markdown noise. */
+    private static String sanitizeTitle(String title) {
+        if (title == null || title.isBlank()) return "未命名文档";
+        String cleaned = title.replaceAll("[*_`#~>\\[\\]]", "")
+                .replaceAll("\\s+", " ").trim();
+        if (cleaned.length() <= 40) return cleaned;
+        int cut = cleaned.lastIndexOf(' ', 40);
+        return (cut > 15 ? cleaned.substring(0, cut) : cleaned.substring(0, 40)) + "…";
+    }
+
     /** Parse folderId, returning null for non-UUID values like "default" or "root". */
     private static UUID parseFolderId(String folderId) {
         if (folderId == null || folderId.isBlank()) return null;
@@ -559,6 +693,8 @@ public class AgentTools {
             // Build answer view
             var view = qa.answerView(answerId);
             List<Map<String, Object>> citations = new ArrayList<>();
+            Map<Integer, Map<String, String>> citationMap = new LinkedHashMap<>();
+            int idx = 1;
             for (var claim : view.claims()) {
                 for (var citation : claim.citations()) {
                     Map<String, Object> c = new LinkedHashMap<>();
@@ -567,20 +703,30 @@ public class AgentTools {
                     c.put("exactQuote", citation.exactQuote());
                     c.put("resourceType", citation.resourceType().name());
                     c.put("resourceId", citation.resourceId().toString());
-                    c.put("resourceName", resolveResourceName(citation.resourceType(), citation.resourceId()));
+                    String name = resolveResourceName(citation.resourceType(), citation.resourceId());
+                    c.put("resourceName", name);
                     c.put("locatorJson", citation.locatorJson());
                     c.put("unitId", citation.unitId().toString());
                     citations.add(c);
+
+                    // Build citation map entry for inline marker rendering
+                    Map<String, String> meta = new LinkedHashMap<>();
+                    meta.put("resourceId", citation.resourceId().toString());
+                    meta.put("resourceType", citation.resourceType().name());
+                    meta.put("locatorJson", citation.locatorJson());
+                    meta.put("resourceName", name);
+                    citationMap.put(idx++, meta);
                 }
             }
 
-            return Map.<String, Object>of(
-                    "answer", view.answer().directAnswer(),
-                    "answerId", answerId.toString(),
-                    "status", view.answer().status().name(),
-                    "citationCount", citations.size(),
-                    "citations", citations
-            );
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("answer", view.answer().directAnswer());
+            result.put("answerId", answerId.toString());
+            result.put("status", view.answer().status().name());
+            result.put("citationCount", citations.size());
+            result.put("citations", citations);
+            result.put("citationMap", citationMap);
+            return result;
         } catch (Exception e) {
             return Map.<String, Object>of("error", "问答失败: " + e.getMessage());
         }

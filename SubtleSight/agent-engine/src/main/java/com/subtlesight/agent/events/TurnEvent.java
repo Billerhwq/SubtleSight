@@ -64,6 +64,11 @@ public record TurnEvent(
                 "toolName", tool, "success", success, "result", result), Instant.now());
     }
 
+    public static TurnEvent stepChunk(UUID turnId, int ordinal, String chunk) {
+        return new TurnEvent(turnId.toString(), "step_chunk", Map.of(
+                "turnId", turnId.toString(), "ordinal", ordinal, "chunk", chunk), Instant.now());
+    }
+
     public static TurnEvent confirmationRequired(UUID turnId, String tool, String description) {
         return new TurnEvent(turnId.toString(), "confirmation_required", Map.of(
                 "turnId", turnId.toString(), "toolName", tool,

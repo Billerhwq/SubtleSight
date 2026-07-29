@@ -107,6 +107,28 @@ function nodeColors(node: DrawNode): { fill: string; stroke: string; text: strin
   }
 }
 
+/** Split a label into wrapped lines to fit within node width at given fontSize. */
+function wrapLabel(label: string, maxWidth: number, fontSize: number): string[] {
+  const avgCharWidth = fontSize * 0.6; // approximate CJK char width in px
+  const maxChars = Math.max(1, Math.floor(maxWidth / avgCharWidth) - 2);
+  if (label.length <= maxChars) return [label];
+  const lines: string[] = [];
+  let remaining = label;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxChars) { lines.push(remaining); break; }
+    // Try to break at a natural boundary
+    let cut = maxChars;
+    const naturalBreaks = ['，', ',', ' ', '、', '。', '.', ';', '；', ':', '：', '-', '—'];
+    for (const sep of naturalBreaks) {
+      const pos = remaining.lastIndexOf(sep, maxChars);
+      if (pos > maxChars / 2) { cut = pos + 1; break; }
+    }
+    lines.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut);
+  }
+  return lines.slice(0, 5); // max 5 lines
+}
+
 function DiagramPreview({ model }: { model: DrawingModel }): ReactNode {
   return (
     <svg className="ke-diagram-svg" viewBox="0 0 920 520" role="img" aria-label="Draw 图形预览">
@@ -121,6 +143,9 @@ function DiagramPreview({ model }: { model: DrawingModel }): ReactNode {
       })}
       {model.nodes.map(node => {
         const colors = nodeColors(node);
+        const fontSize = node.kind === 'note' ? 12 : 14;
+        const lines = wrapLabel(node.label, node.width - 16, fontSize);
+        const lineHeight = fontSize * 1.4;
         if (node.kind === 'diamond') {
           const cx = node.x + node.width / 2;
           const cy = node.y + node.height / 2;
@@ -128,7 +153,9 @@ function DiagramPreview({ model }: { model: DrawingModel }): ReactNode {
           return (
             <g key={node.id}>
               <polygon points={points} fill={colors.fill} stroke={colors.stroke} strokeWidth="1.7" />
-              <text x={cx} y={cy + 4} fill={colors.text} fontSize="14" textAnchor="middle">{node.label}</text>
+              {lines.map((line, i) => (
+                <text key={i} x={cx} y={cy - (lines.length - 1) * lineHeight / 2 + i * lineHeight + 4} fill={colors.text} fontSize={fontSize} textAnchor="middle">{line}</text>
+              ))}
             </g>
           );
         }
@@ -144,15 +171,18 @@ function DiagramPreview({ model }: { model: DrawingModel }): ReactNode {
               stroke={colors.stroke}
               strokeWidth="1.7"
             />
-            <text
-              x={node.x + node.width / 2}
-              y={node.y + node.height / 2 + 5}
-              fill={colors.text}
-              fontSize={node.kind === 'note' ? 12 : 14}
-              textAnchor="middle"
-            >
-              {node.label.length > 17 ? `${node.label.slice(0, 17)}…` : node.label}
-            </text>
+            {lines.map((line, i) => (
+              <text
+                key={i}
+                x={node.x + node.width / 2}
+                y={node.y + node.height / 2 - (lines.length - 1) * lineHeight / 2 + i * lineHeight}
+                fill={colors.text}
+                fontSize={fontSize}
+                textAnchor="middle"
+              >
+                {line}
+              </text>
+            ))}
           </g>
         );
       })}
@@ -168,8 +198,11 @@ interface DrawBoardProps {
 
 function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
   const [selectedId, setSelectedId] = useState<string | null>(model.nodes[0]?.id ?? null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState('');
+  const editInputRef = useRef<HTMLInputElement>(null!);
   const [zoom, setZoom] = useState(100);
-  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLDivElement>(null!);
   const selected = model.nodes.find(node => node.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -183,7 +216,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
   };
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>, node: DrawNode) => {
-    event.preventDefault();
+    // Don't preventDefault here — let the browser handle text selection on plain clicks
     event.stopPropagation();
     setSelectedId(node.id);
     const canvas = canvasRef.current;
@@ -193,11 +226,19 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
     const startY = event.clientY;
     const originX = node.x;
     const originY = node.y;
+    let dragging = false;
 
     const move = (pointer: PointerEvent) => {
+      const dx = pointer.clientX - startX;
+      const dy = pointer.clientY - startY;
+      if (!dragging && Math.abs(dx) < 3 && Math.abs(dy) < 3) return; // threshold: plain click
+      if (!dragging) {
+        dragging = true;
+        event.preventDefault(); // only block text selection when actually dragging
+      }
       const scale = zoom / 100;
-      const x = Math.max(0, Math.min(920 - node.width, originX + (pointer.clientX - startX) / scale));
-      const y = Math.max(50, Math.min(520 - node.height, originY + (pointer.clientY - startY) / scale));
+      const x = originX + dx / scale;
+      const y = originY + dy / scale;
       if (pointer.clientX >= bounds.left - 20 && pointer.clientX <= bounds.right + 20)
         onChange(updateNode(model, node.id, { x: Math.round(x), y: Math.round(y) }));
     };
@@ -263,9 +304,29 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
                     borderColor: colors.stroke,
                     color: colors.text,
                   }}
-                  onPointerDown={event => startDrag(event, node)}
+                  onPointerDown={event => { if (editingNodeId !== node.id) startDrag(event, node); }}
+                  onDoubleClick={() => { setEditingNodeId(node.id); setEditingLabel(node.label); setTimeout(() => editInputRef.current?.focus(), 0); }}
+                  onClick={e => e.stopPropagation()}
                 >
-                  <span>{node.label}</span>
+                  {editingNodeId === node.id ? (
+                    <input
+                      ref={editInputRef as any}
+                      className="ke-node-edit-input"
+                      value={editingLabel}
+                      onChange={e => setEditingLabel(e.target.value)}
+                      onBlur={() => {
+                        if (editingLabel.trim()) onChange(updateNode(model, node.id, { label: editingLabel.trim() }));
+                        setEditingNodeId(null);
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                        if (e.key === 'Escape') { setEditingNodeId(null); }
+                      }}
+                      onPointerDown={e => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span>{node.label}</span>
+                  )}
                 </div>
               );
             })}
@@ -329,7 +390,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
           <div className="ke-property-empty">选择一个图形后，可在这里编辑文字、颜色与尺寸。</div>
         )}
         <div className="ke-insert-panel">
-          <Button block theme="solid" type="primary" icon={<IconPlus />} onClick={onInsert}>插入到文档</Button>
+          <Button block theme="solid" type="primary" icon={<IconPlus />} style={{ color: '#fff' }} onClick={onInsert}>插入到文档</Button>
           <p>保存节点、连线和位置，并作为可继续编辑的图块同步到正文。</p>
         </div>
       </aside>
@@ -337,7 +398,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
   );
 }
 
-export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded?: boolean; onBack?: () => void; documentId?: string | null }): ReactNode {
+export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlockId, highlightNodeId }: { embedded?: boolean; onBack?: () => void; documentId?: string | null; highlightBlockId?: string; highlightNodeId?: string }): ReactNode {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -372,8 +433,8 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
     content: '',
     immediatelyRender: false,
     editorProps: { attributes: { class: 'ke-prose' } },
-    onUpdate: ({ editor: activeEditor }) => {
-      const html = (activeEditor as any).getHTML();
+    onUpdate: ({ editor: activeEditor }: { editor: any }) => {
+      const html = activeEditor.getHTML();
       setDraft(current => {
         if (!current || current.contentHtml === html) return current;
         const next = { ...current, contentHtml: html };
@@ -387,8 +448,8 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ed = editor as any;
 
-  const documents = (documentsQuery as any).data ?? [] as KnowledgeDocument[];
-  const folders = (foldersQuery as any).data ?? [] as KnowledgeFolder[];
+  const documents: KnowledgeDocument[] = (documentsQuery as any).data ?? [];
+  const folders: KnowledgeFolder[] = (foldersQuery as any).data ?? [];
   const drawing = useMemo(() => parseDrawing(draft?.drawingJson), [draft?.drawingJson]);
   const currentSignature = draft ? draftSignature(draft) : '';
 
@@ -437,6 +498,54 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
       }
     }
   }, [currentId, loadDocument]);
+
+  // Highlight target block/node from citation navigation
+  useEffect(() => {
+    if (!draft || loadingDocument) return;
+    if (!highlightBlockId && !highlightNodeId) return;
+
+    const timer = setTimeout(() => {
+      if (highlightNodeId && mode !== 'draw') {
+        setMode('draw');
+        // Give DrawBoard time to render, then try to select the node
+        setTimeout(() => {
+          const nodeEl = document.querySelector(`[data-node-id="${highlightNodeId}"]`);
+          if (nodeEl) {
+            nodeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            nodeEl.classList.add('citation-flash');
+            setTimeout(() => nodeEl.classList.remove('citation-flash'), 2500);
+          }
+        }, 300);
+        return;
+      }
+
+      if (highlightBlockId) {
+        // Try to find the block element in the rendered editor content
+        const blockEl = document.querySelector(`[data-block-id="${highlightBlockId}"]`);
+        if (blockEl) {
+          blockEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          blockEl.classList.add('citation-flash');
+          setTimeout(() => blockEl.classList.remove('citation-flash'), 2500);
+        } else {
+          // Fallback: search for text content using blockId pattern in headings/paragraphs
+          const editorEl = document.querySelector('.ke-prose');
+          if (editorEl) {
+            // Try finding by ordinal block (block:0001 style)
+            const allBlocks = editorEl.querySelectorAll('p, h1, h2, h3, h4, li, div');
+            const blockOrdinal = parseInt(highlightBlockId, 10);
+            if (!isNaN(blockOrdinal) && blockOrdinal > 0 && blockOrdinal <= allBlocks.length) {
+              const target = allBlocks[blockOrdinal - 1] as HTMLElement;
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              target.classList.add('citation-flash');
+              setTimeout(() => target.classList.remove('citation-flash'), 2500);
+            }
+          }
+        }
+      }
+    }, 400); // Wait for editor to fully render
+
+    return () => clearTimeout(timer);
+  }, [draft, loadingDocument, highlightBlockId, highlightNodeId, mode]);
 
   // Listen for agent draw events — auto-refresh draft when agent modifies the current document
   useEffect(() => {
@@ -539,7 +648,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
     try {
       const created = await post<KnowledgeDocument>('/knowledge/documents', {
         folderId: null,
-        title: '无标题文档',
+        title: `新文档 ${new Date().toLocaleDateString('zh-CN')}`,
         contentHtml: DEFAULT_CONTENT,
         drawingJson: stringifyDrawing(DEFAULT_DRAWING),
       });
@@ -569,7 +678,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
       content: `确定删除「${current.title}」及其版本历史吗？`,
       okText: '删除',
       okButtonProps: { type: 'danger' as const, theme: 'solid' as const },
-      onOk: () => { void doDelete(); },
+      onOk: () => { setTimeout(() => { void doDelete(); }, 0); },
     });
   };
 
@@ -721,9 +830,9 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
             <span />
             {saveCopy}
           </div>
-          <Button theme="borderless" icon={<IconEdit />} onClick={() => setAiOpen(true)} disabled={!draft}>AI 辅助</Button>
-          <Button theme="borderless" icon={<IconArticle />} onClick={() => void openVersions()} disabled={!draft}>历史</Button>
-          <Button icon={<IconSave />} onClick={() => void saveCurrent('手动保存', true)} disabled={!draft}>保存</Button>
+          <Button theme="borderless" icon={<IconEdit />} style={{ color: '#fff' }} onClick={() => setAiOpen(true)} disabled={!draft}>AI 辅助</Button>
+          <Button theme="borderless" icon={<IconArticle />} style={{ color: '#fff' }} onClick={() => void openVersions()} disabled={!draft}>历史</Button>
+          <Button icon={<IconSave />} style={{ color: '#fff' }} onClick={() => void saveCurrent('手动保存', true)} disabled={!draft}>保存</Button>
           {!embedded && <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => void createDocument()}>新建</Button>}
         </header>
 
@@ -782,7 +891,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
                 <section className="ke-diagram-block" id="ke-diagram-block">
                   <header>
                     <div><span className="ke-diagram-icon">⌘</span><strong>项目实施流程.draw</strong></div>
-                    <Button size="small" theme="light" type="primary" icon={<IconEdit />} onClick={() => setMode('draw')}>编辑图形</Button>
+                    <Button size="small" theme="light" type="primary" icon={<IconEdit />} style={{ color: '#fff' }} onClick={() => setMode('draw')}>编辑图形</Button>
                   </header>
                   <div className="ke-diagram-preview"><DiagramPreview model={drawing} /></div>
                   <footer>
@@ -806,7 +915,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
                 <button onClick={() => setMode('draw')}>进入 Draw 编辑 →</button>
               </div>
               <div className="ke-side-actions">
-                <Button block icon={<IconArticle />} onClick={() => void openVersions()}>查看版本历史</Button>
+                <Button block icon={<IconArticle />} style={{ color: '#fff' }} onClick={() => void openVersions()}>查看版本历史</Button>
                 <Button block type="danger" theme="borderless" icon={<IconDelete />} onClick={deleteCurrent}>删除文档</Button>
               </div>
             </aside>
@@ -819,7 +928,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
         visible={versionsOpen}
         width={620}
         footer={<></> as any}
-        onCancel={() => setVersionsOpen(false)}
+        onCancel={() => { setTimeout(() => setVersionsOpen(false), 0); }}
       >
         {versionsLoading ? <div className="ke-modal-loading"><Spin /></div> : (
           <div className="ke-version-list">
@@ -845,7 +954,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId }: { embedded
         title="AI 文档助手"
         visible={aiOpen}
         width={640}
-        onCancel={() => setAiOpen(false)}
+        onCancel={() => { setTimeout(() => setAiOpen(false), 0); }}
         footer={(
           <div className="ke-ai-footer">
             <Button onClick={() => setAiOpen(false)}>取消</Button>

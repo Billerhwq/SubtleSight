@@ -4,7 +4,7 @@ export interface Source{id:string;name:string;type:SourceType;kind:string;endpoi
 export interface Story{id:string;title:string;summary?:string;status:string;firstObservedAt:string;lastObservedAt:string;sourceCount:number;sourceFamilyCount:number;entities:string[];topics:string[];manualOverride:boolean}
 export interface Signal{score:number;reasonCodes:string[];features:Record<string,number>;computedAt:string;viewType:ViewType}
 export interface FeedItem{story:Story;signal:Signal;saved:boolean;hidden:boolean;timeline:StoryMember[]}
-export interface StoryMember{storyId:string;documentVersionId:string;role:string;sourceFamily:string;similarity:number;addedAt:string}
+export interface StoryMember{storyId:string;documentVersionId:string;role:string;sourceFamily:string;similarity:number;addedAt:string;title?:string;summary?:string;text?:string;canonicalUrl?:string;publishedAt?:string;author?:string;language?:string}
 export interface ResearchRun{id:string;storyId?:string;question:string;mode:string;status:string;usage:{queries:number;pages:number;tokens:number;cost:number};gaps:string[];updatedAt:string}
 export interface Claim{id:string;statement:string;status:string;critical:boolean}
 export interface WatchTarget{id:string;type:string;name:string;expression:string;baselineJson?:string;baselineVersion:number;enabled:boolean;updatedAt:string}
