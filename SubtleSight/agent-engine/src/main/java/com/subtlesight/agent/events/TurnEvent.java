@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
+import com.subtlesight.agent.tools.ToolModels.ToolResult;
+
 /**
  * Typed SSE event for a turn's lifecycle.
  * <p>
@@ -52,16 +54,63 @@ public record TurnEvent(
     }
 
     public static TurnEvent stepStarted(UUID turnId, int ordinal, String tool, String description) {
-        return new TurnEvent(turnId.toString(), "step_started", Map.of(
-                "turnId", turnId.toString(), "ordinal", ordinal,
-                "toolName", tool, "description", description), Instant.now());
+        return stepStarted(turnId, ordinal, tool, description, null, null, null, null);
+    }
+
+    public static TurnEvent stepStarted(UUID turnId, int ordinal, String tool, String description,
+                                        String callId, String toolId, String toolVersion, String label) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("turnId", turnId.toString());
+        data.put("ordinal", ordinal);
+        data.put("toolName", tool);
+        data.put("description", description);
+        if (callId != null) data.put("callId", callId);
+        if (toolId != null) data.put("toolId", toolId);
+        if (toolVersion != null) data.put("toolVersion", toolVersion);
+        if (label != null) data.put("label", label);
+        return new TurnEvent(turnId.toString(), "step_started", data, Instant.now());
     }
 
     public static TurnEvent stepCompleted(UUID turnId, int ordinal, String tool,
                                            boolean success, Map<String, Object> result) {
-        return new TurnEvent(turnId.toString(), "step_completed", Map.of(
-                "turnId", turnId.toString(), "ordinal", ordinal,
-                "toolName", tool, "success", success, "result", result), Instant.now());
+        return stepCompleted(turnId, ordinal, tool, success, result, null);
+    }
+
+    public static TurnEvent stepCompleted(UUID turnId, int ordinal, String tool,
+                                           boolean success, Map<String, Object> result,
+                                           ToolResult protocolResult) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("turnId", turnId.toString());
+        data.put("ordinal", ordinal);
+        data.put("toolName", tool);
+        data.put("success", success);
+        data.put("result", result);
+        if (protocolResult != null) {
+            data.put("callId", protocolResult.callId());
+            data.put("toolId", protocolResult.toolId());
+            data.put("toolVersion", protocolResult.toolVersion());
+            data.put("toolResult", protocolResult.toMap());
+        }
+        return new TurnEvent(turnId.toString(), "step_completed", data, Instant.now());
+    }
+
+    public static TurnEvent toolProgress(UUID turnId, int ordinal, String callId,
+                                          String toolName, String toolId, String toolVersion,
+                                          String phase, String summary, String detail, Double progress) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("type", "tool.progress");
+        data.put("eventId", "evt_" + UUID.randomUUID());
+        data.put("turnId", turnId.toString());
+        data.put("ordinal", ordinal);
+        data.put("callId", callId);
+        data.put("toolName", toolName);
+        data.put("toolId", toolId);
+        data.put("toolVersion", toolVersion);
+        data.put("phase", phase);
+        data.put("summary", summary);
+        if (detail != null) data.put("detail", detail);
+        if (progress != null) data.put("progress", progress);
+        return new TurnEvent(turnId.toString(), "tool_progress", data, Instant.now());
     }
 
     public static TurnEvent stepChunk(UUID turnId, int ordinal, String chunk) {

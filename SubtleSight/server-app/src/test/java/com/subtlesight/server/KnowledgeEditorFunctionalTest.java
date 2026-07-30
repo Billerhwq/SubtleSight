@@ -41,6 +41,12 @@ class KnowledgeEditorFunctionalTest {
     private final ObjectMapper json;
 
     @Autowired
+    private KnowledgeService knowledge;
+
+    @Autowired
+    private AgentTools agentTools;
+
+    @Autowired
     KnowledgeEditorFunctionalTest(MockMvc mvc, ObjectMapper json) {
         this.mvc = mvc;
         this.json = json;
@@ -122,5 +128,24 @@ class KnowledgeEditorFunctionalTest {
                 .andExpect(jsonPath("$.version").value(3))
                 .andExpect(jsonPath("$.title").value("课程项目说明"))
                 .andExpect(jsonPath("$.drawingJson").value(org.hamcrest.Matchers.containsString("\"start\"")));
+    }
+
+    @Test
+    void agentDiagramPreservesExistingDocumentContent() {
+        String article = "<h1>AI Agent 的发展现状与落地实践</h1><p>这是一篇已经生成并保存的完整正文。</p>";
+        var document = knowledge.createDocument(null, "Agent 实践", article, null);
+
+        Map<String, Object> result = agentTools.drawDiagram(
+                document.id().toString(),
+                java.util.List.of(
+                        Map.of("label", "用户请求"),
+                        Map.of("label", "最终回答")),
+                java.util.List.of(Map.of("from", 0, "to", 1)),
+                true);
+
+        assertThat(result).doesNotContainKey("error");
+        var saved = knowledge.requireDocument(document.id());
+        assertThat(saved.contentHtml()).isEqualTo(article);
+        assertThat(saved.drawingJson()).contains("用户请求", "最终回答");
     }
 }

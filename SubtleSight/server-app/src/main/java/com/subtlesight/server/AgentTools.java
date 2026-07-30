@@ -3,7 +3,10 @@ package com.subtlesight.server;
 import com.subtlesight.agent.tools.DrawToolHelper;
 import com.subtlesight.agent.tools.annotations.AgentTool;
 import com.subtlesight.agent.tools.annotations.AgentTool.RiskLevel;
+import com.subtlesight.agent.tools.annotations.ToolEffectSpec;
 import com.subtlesight.agent.tools.annotations.ToolParam;
+import com.subtlesight.agent.tools.annotations.ToolPresentation;
+import com.subtlesight.agent.tools.annotations.ToolRuntime;
 import com.subtlesight.application.Ports.AiProvider;
 import com.subtlesight.application.Ports.AiProvider.AiRequest;
 import com.subtlesight.application.Ports.AiProvider.AiResult;
@@ -308,7 +311,19 @@ public class AgentTools {
         }
     }
 
-    @AgentTool(name = "create_document", description = "在知识库中创建新文档", risk = AgentTool.RiskLevel.MEDIUM)
+    @AgentTool(id = "knowledge.document.create", name = "create_document", version = "1.0.0",
+            description = "在知识库中创建一篇新文档。仅在用户明确要求新建文档时使用；如果用户要求修改当前文档，应使用 update_document。",
+            risk = AgentTool.RiskLevel.MEDIUM)
+    @ToolRuntime(sideEffect = ToolRuntime.SideEffect.WRITE,
+            permissions = "knowledge.document.write",
+            idempotency = ToolRuntime.Idempotency.REQUIRED,
+            idempotencyTtlSeconds = 86400,
+            concurrency = ToolRuntime.Concurrency.SERIAL_PER_RESOURCE)
+    @ToolEffectSpec(type = ToolEffectSpec.Type.RESOURCE_CREATED,
+            resourceType = "knowledge_document", changedFields = {"title", "contentHtml", "folderId"})
+    @ToolPresentation(label = "创建文档", category = "知识库", icon = "file-plus",
+            queued = "准备创建知识文档", running = "正在写入文档内容",
+            verifying = "正在校验新文档", succeeded = "文档已创建")
     public Map<String, Object> createDocument(
             @ToolParam(name = "title", description = "文档标题") String title,
             @ToolParam(name = "content", description = "文档的 HTML 内容") String contentHtml,
@@ -335,7 +350,20 @@ public class AgentTools {
         }
     }
 
-    @AgentTool(name = "update_document", description = "更新已有文档的内容，自动处理版本递增", risk = AgentTool.RiskLevel.MEDIUM)
+    @AgentTool(id = "knowledge.document.update", name = "update_document", version = "1.0.0",
+            description = "更新当前或指定知识文档的 HTML 正文并执行乐观版本校验。仅用于修改已有文档，不用于创建文档或更新 Draw。",
+            risk = AgentTool.RiskLevel.MEDIUM)
+    @ToolRuntime(sideEffect = ToolRuntime.SideEffect.WRITE,
+            contextRequirements = {"current_document", "authenticated_actor"},
+            permissions = "knowledge.document.write",
+            idempotency = ToolRuntime.Idempotency.REQUIRED,
+            idempotencyTtlSeconds = 86400,
+            concurrency = ToolRuntime.Concurrency.SERIAL_PER_RESOURCE)
+    @ToolEffectSpec(type = ToolEffectSpec.Type.RESOURCE_UPDATED,
+            resourceType = "knowledge_document", changedFields = {"contentHtml"})
+    @ToolPresentation(label = "更新文档", category = "知识库", icon = "file-pen-line",
+            queued = "准备更新当前文档", running = "正在写入文档内容",
+            verifying = "正在校验保存结果", succeeded = "文档已更新")
     public Map<String, Object> updateDocument(
             @ToolParam(name = "documentId", description = "要更新的文档 ID") String documentId,
             @ToolParam(name = "content", description = "新的 HTML 内容") String contentHtml,
@@ -375,9 +403,8 @@ public class AgentTools {
             int version = doc.version();
             DrawToolHelper.DrawData updated = DrawToolHelper.addNode(data, kind, label, x, y);
             String newNodeId = updated.nodes().get(updated.nodes().size() - 1).id();
-            var saved = knowledge.updateDocument(
-                    UUID.fromString(documentId), null, null, null,
-                    DrawToolHelper.stringifyDrawing(updated), version,
+            var saved = knowledge.updateDrawing(
+                    UUID.fromString(documentId), DrawToolHelper.stringifyDrawing(updated), version,
                     "添加节点: " + label);
             DrawToolHelper.DrawData resultData = DrawToolHelper.parseDrawing(saved.drawingJson());
             return Map.<String, Object>of(
@@ -404,9 +431,8 @@ public class AgentTools {
             int version = doc.version();
             DrawToolHelper.DrawData updated = DrawToolHelper.addEdge(data, from, to);
             String newEdgeId = updated.edges().get(updated.edges().size() - 1).id();
-            var saved = knowledge.updateDocument(
-                    UUID.fromString(documentId), null, null, null,
-                    DrawToolHelper.stringifyDrawing(updated), version,
+            var saved = knowledge.updateDrawing(
+                    UUID.fromString(documentId), DrawToolHelper.stringifyDrawing(updated), version,
                     "添加边: " + from + " → " + to);
             DrawToolHelper.DrawData resultData = DrawToolHelper.parseDrawing(saved.drawingJson());
             return Map.<String, Object>of(
@@ -432,9 +458,8 @@ public class AgentTools {
             @ToolParam(name = "y", description = "新的 Y 坐标", required = false) Double y) {
         return updateDrawing(documentId, (data, version) -> {
             DrawToolHelper.DrawData updated = DrawToolHelper.updateNode(data, nodeId, label, kind, x, y);
-            return knowledge.updateDocument(
-                    UUID.fromString(documentId), null, null, null,
-                    DrawToolHelper.stringifyDrawing(updated), version,
+            return knowledge.updateDrawing(
+                    UUID.fromString(documentId), DrawToolHelper.stringifyDrawing(updated), version,
                     "更新节点: " + nodeId);
         });
     }
@@ -445,9 +470,8 @@ public class AgentTools {
             @ToolParam(name = "nodeId", description = "要删除的节点 ID") String nodeId) {
         return updateDrawing(documentId, (data, version) -> {
             DrawToolHelper.DrawData updated = DrawToolHelper.removeNode(data, nodeId);
-            return knowledge.updateDocument(
-                    UUID.fromString(documentId), null, null, null,
-                    DrawToolHelper.stringifyDrawing(updated), version,
+            return knowledge.updateDrawing(
+                    UUID.fromString(documentId), DrawToolHelper.stringifyDrawing(updated), version,
                     "删除节点: " + nodeId);
         });
     }
@@ -457,18 +481,53 @@ public class AgentTools {
             @ToolParam(name = "documentId", description = "目标文档 ID") String documentId) {
         return updateDrawing(documentId, (data, version) -> {
             DrawToolHelper.DrawData updated = DrawToolHelper.autoLayout(data);
-            return knowledge.updateDocument(
-                    UUID.fromString(documentId), null, null, null,
-                    DrawToolHelper.stringifyDrawing(updated), version,
+            return knowledge.updateDrawing(
+                    UUID.fromString(documentId), DrawToolHelper.stringifyDrawing(updated), version,
                     "自动布局");
         });
     }
 
-    @AgentTool(name = "draw_diagram", description = "一次性绘制完整图表：用节点/边列表覆盖文档的 drawingJson，边可用节点索引或节点 ID", risk = AgentTool.RiskLevel.MEDIUM)
+    @AgentTool(id = "knowledge.draw.replace", name = "draw_diagram", version = "1.0.0",
+            description = "用完整节点和连线列表替换当前文档的 Draw 数据。仅在用户要求创建或重绘完整结构图时使用，不修改文档正文。",
+            risk = AgentTool.RiskLevel.MEDIUM)
+    @ToolRuntime(sideEffect = ToolRuntime.SideEffect.WRITE,
+            contextRequirements = {"current_document", "authenticated_actor"},
+            permissions = "knowledge.draw.write",
+            idempotency = ToolRuntime.Idempotency.REQUIRED,
+            idempotencyTtlSeconds = 86400,
+            concurrency = ToolRuntime.Concurrency.SERIAL_PER_RESOURCE)
+    @ToolEffectSpec(type = ToolEffectSpec.Type.RESOURCE_UPDATED,
+            resourceType = "knowledge_draw", changedFields = {"drawingJson"})
+    @ToolPresentation(label = "重绘 Draw", category = "知识库", icon = "workflow",
+            queued = "准备生成图结构", running = "正在写入节点和连线",
+            verifying = "正在校验 Draw 数据", succeeded = "Draw 已更新")
     public Map<String, Object> drawDiagram(
             @ToolParam(name = "documentId", description = "目标文档 ID") String documentId,
-            @ToolParam(name = "nodes", description = "节点列表，每项 {kind?, label, x?, y?, id?}") List<Map<String, Object>> nodes,
-            @ToolParam(name = "edges", description = "边列表，每项 {from, to}；from/to 可以是节点索引(数字)或节点 ID") List<Map<String, Object>> edges,
+            @ToolParam(name = "nodes", description = "节点列表，每项 {kind?, label, x?, y?, id?}", schema = """
+                    {
+                      "type":"array","minItems":1,"maxItems":100,
+                      "items":{"type":"object","additionalProperties":false,
+                        "required":["id","kind","label","x","y"],
+                        "properties":{
+                          "id":{"type":["string","null"]},
+                          "kind":{"type":["string","null"],"enum":["rect","pill","accent","purple","note","diamond",null]},
+                          "label":{"type":"string","maxLength":120},
+                          "x":{"type":["number","null"],"minimum":0,"maximum":10000},
+                          "y":{"type":["number","null"],"minimum":0,"maximum":10000}
+                        }}
+                    }
+                    """) List<Map<String, Object>> nodes,
+            @ToolParam(name = "edges", description = "边列表，每项 {from, to}；from/to 可以是节点索引(数字)或节点 ID", schema = """
+                    {
+                      "type":"array","maxItems":200,
+                      "items":{"type":"object","additionalProperties":false,
+                        "required":["from","to"],
+                        "properties":{
+                          "from":{"type":["integer","string"]},
+                          "to":{"type":["integer","string"]}
+                        }}
+                    }
+                    """) List<Map<String, Object>> edges,
             @ToolParam(name = "autoLayout", description = "完成后是否自动布局", required = false) Boolean autoLayout) {
         if (nodes != null && !nodes.isEmpty()) {
             Object first = nodes.get(0);
@@ -503,9 +562,8 @@ public class AgentTools {
             if (Boolean.TRUE.equals(autoLayout)) {
                 result = DrawToolHelper.autoLayout(result);
             }
-            return knowledge.updateDocument(
-                    UUID.fromString(documentId), null, null, null,
-                    DrawToolHelper.stringifyDrawing(result), version,
+            return knowledge.updateDrawing(
+                    UUID.fromString(documentId), DrawToolHelper.stringifyDrawing(result), version,
                     "Agent 绘制图表");
         });
     }
@@ -612,6 +670,7 @@ public class AgentTools {
             return Map.<String, Object>of(
                     "documentId", updated.id().toString(),
                     "version", updated.version(),
+                    "previousVersion", version,
                     "nodeCount", resultData.nodes().size(),
                     "edgeCount", resultData.edges().size(),
                     "drawingJson", drawingJson

@@ -16,6 +16,11 @@ export async function confirmTurn(turnId: string, approved: boolean): Promise<vo
   await post<void>(`/agent/turns/${turnId}/confirm`, { approved });
 }
 
+/** Stop a running turn. Cancellation is best-effort for an in-flight tool call. */
+export async function cancelTurn(turnId: string): Promise<void> {
+  await post<void>(`/agent/turns/${turnId}/cancel`, {});
+}
+
 /** List recent sessions. */
 export async function listSessions(limit = 20, offset = 0): Promise<AssistantSession[]> {
   return get<AssistantSession[]>(`/agent/sessions?limit=${limit}&offset=${offset}`);

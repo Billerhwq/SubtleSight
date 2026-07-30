@@ -71,7 +71,7 @@ public final class LlmPlanner implements Planner {
                 return fallback.plan(message, context, history);
             }
 
-            return parseResponse(content, message);
+            return parseResponse(content, message, context);
         } catch (Exception e) {
             return fallback.plan(message, context, history);
         }
@@ -80,6 +80,10 @@ public final class LlmPlanner implements Planner {
     // ── Response parsing ──
 
     Plan parseResponse(String raw, String fallbackMessage) {
+        return parseResponse(raw, fallbackMessage, Map.of());
+    }
+
+    Plan parseResponse(String raw, String fallbackMessage, Map<String, Object> context) {
         try {
             // Sanity check LLM output for injection markers
             if (com.subtlesight.agent.InjectionDetector.isInjection(raw)) {
@@ -137,6 +141,7 @@ public final class LlmPlanner implements Planner {
                         Map.of("query", fallbackMessage)));
             }
 
+            steps = completeRequiredActions(steps, fallbackMessage, context);
             String rationale = root.has("rationale") ? root.get("rationale").asText() : "";
             return new Plan(UUID.randomUUID(), steps, rationale);
 
@@ -149,6 +154,159 @@ public final class LlmPlanner implements Planner {
     }
 
     // ── Helpers ──
+
+    /**
+     * LLM plans are advisory. Explicit write/draw requests must not disappear just
+     * because the model returned a syntactically valid but incomplete plan.
+     */
+    private List<PlanStep> completeRequiredActions(List<PlanStep> parsed,
+                                                   String message,
+                                                   Map<String, Object> context) {
+        List<PlanStep> completed = new ArrayList<>(parsed);
+        String lower = message.toLowerCase(Locale.ROOT);
+        String documentId = contextString(context, "currentDocId", "documentId");
+        Integer documentVersion = contextInteger(context, "currentDocVersion", "expectedVersion", "version");
+
+        boolean writesCurrentDocument = documentId != null
+                && hasAny(lower, "当前文档", "当前空白文档", "此文档", "本篇文档", "current document")
+                && hasAny(lower, "撰写", "写一篇", "写入", "直接写", "生成文章", "编辑", "补充", "write");
+        boolean generatesDocumentContent = hasAny(lower, "从零撰写", "撰写一篇", "写一篇", "生成一篇",
+                "生成文章", "约 1500 字", "约1500字", "write an article");
+
+        if (writesCurrentDocument && generatesDocumentContent) {
+            List<PlanStep> normalized = new ArrayList<>(completed.size());
+            boolean markedFirstUpdate = false;
+            for (PlanStep step : completed) {
+                if (step.tool().equals("update_document") && !markedFirstUpdate) {
+                    Map<String, Object> params = new LinkedHashMap<>(step.params());
+                    params.put("documentId", documentId);
+                    params.put("generateFromRequest", true);
+                    params.put("changeSummary", "AI 根据用户要求撰写文档");
+                    if (documentVersion == null) {
+                        params.remove("expectedVersion");
+                    } else {
+                        params.put("expectedVersion", documentVersion);
+                    }
+                    normalized.add(new PlanStep(step.ordinal(), step.tool(), step.description(), params));
+                    markedFirstUpdate = true;
+                } else {
+                    normalized.add(step);
+                }
+            }
+            completed = normalized;
+        }
+        boolean hasDocumentWrite = completed.stream().anyMatch(step -> step.tool().equals("update_document"));
+
+        if (writesCurrentDocument && !hasDocumentWrite && knownTools.contains("update_document")) {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("documentId", documentId);
+            params.put("generateFromRequest", true);
+            params.put("changeSummary", "AI 根据用户要求撰写文档");
+            if (documentVersion != null) params.put("expectedVersion", documentVersion);
+            completed.add(new PlanStep(completed.size() + 1, "update_document",
+                    "撰写内容并写入当前文档", params));
+        }
+
+        boolean requestsDiagram = hasAny(lower, "draw", "绘制", "画一张", "画一个", "流程图",
+                "架构图", "路线图", "diagram", "→", "->");
+        boolean hasDraw = completed.stream().anyMatch(step -> step.tool().startsWith("draw_"));
+        if (requestsDiagram && !hasDraw && knownTools.contains("draw_diagram")) {
+            Map<String, Object> params = diagramParams(message, documentId);
+            completed.add(new PlanStep(completed.size() + 1, "draw_diagram",
+                    "在 Draw 中绘制流程图", params));
+        }
+
+        List<PlanStep> renumbered = new ArrayList<>(completed.size());
+        for (int i = 0; i < completed.size(); i++) {
+            PlanStep step = completed.get(i);
+            renumbered.add(new PlanStep(i + 1, step.tool(), step.description(), step.params()));
+        }
+        return renumbered;
+    }
+
+    private static Map<String, Object> diagramParams(String message, String documentId) {
+        List<String> labels = extractArrowLabels(message);
+        if (labels.size() < 2) {
+            labels = List.of("用户请求", "Agent 规划", "工具执行", "结果验证", "最终回答");
+        }
+
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        for (int i = 0; i < labels.size(); i++) {
+            Map<String, Object> node = new LinkedHashMap<>();
+            node.put("id", null);
+            node.put("kind", i == 0 || i == labels.size() - 1 ? "accent" : "rect");
+            node.put("label", labels.get(i));
+            node.put("x", null);
+            node.put("y", null);
+            nodes.add(node);
+        }
+        List<Map<String, Object>> edges = new ArrayList<>();
+        for (int i = 0; i < labels.size() - 1; i++) {
+            edges.add(Map.of("from", i, "to", i + 1));
+        }
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (documentId != null) params.put("documentId", documentId);
+        params.put("nodes", nodes);
+        params.put("edges", edges);
+        params.put("autoLayout", true);
+        return params;
+    }
+
+    private static List<String> extractArrowLabels(String message) {
+        int arrow = message.indexOf('→');
+        if (arrow < 0) arrow = message.indexOf("->");
+        String flow = message;
+        if (arrow >= 0) {
+            int open = Math.max(message.lastIndexOf('“', arrow), message.lastIndexOf('"', arrow));
+            int closeCurly = message.indexOf('”', arrow);
+            int closeStraight = message.indexOf('"', arrow);
+            int close = closeCurly >= 0 && closeStraight >= 0
+                    ? Math.min(closeCurly, closeStraight) : Math.max(closeCurly, closeStraight);
+            if (open >= 0 && close > open) flow = message.substring(open + 1, close);
+        }
+        String[] candidates = flow.split("\\s*(?:→|->)\\s*");
+        if (candidates.length < 2) return List.of();
+
+        List<String> labels = new ArrayList<>();
+        for (String candidate : candidates) {
+            String label = candidate.replaceAll("^[\\s\\\"'“”‘’（(]+|[\\s\\\"'“”‘’）),，。；;]+$", "").trim();
+            int lastQuote = Math.max(label.lastIndexOf('“'), label.lastIndexOf('"'));
+            if (lastQuote >= 0 && lastQuote + 1 < label.length()) label = label.substring(lastQuote + 1).trim();
+            if (label.length() > 24) label = label.substring(Math.max(0, label.length() - 24)).trim();
+            if (!label.isBlank()) labels.add(label);
+        }
+        return labels.size() >= 2 && labels.size() <= 10 ? labels : List.of();
+    }
+
+    private static String contextString(Map<String, Object> context, String... keys) {
+        if (context == null) return null;
+        for (String key : keys) {
+            Object value = context.get(key);
+            if (value instanceof String text && !text.isBlank()) return text;
+        }
+        return null;
+    }
+
+    private static Integer contextInteger(Map<String, Object> context, String... keys) {
+        if (context == null) return null;
+        for (String key : keys) {
+            Object value = context.get(key);
+            if (value instanceof Number number) return number.intValue();
+            if (value instanceof String text) {
+                try { return Integer.parseInt(text); }
+                catch (NumberFormatException ignored) { /* try the next key */ }
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasAny(String text, String... keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) return true;
+        }
+        return false;
+    }
 
     /**
      * Returns true only for simple, single-intent messages where keyword routing
@@ -225,6 +383,7 @@ public final class LlmPlanner implements Planner {
     }
 
     static Object nodeToValue(JsonNode n) {
+        if (n.isNull()) return null;
         if (n.isTextual()) return n.asText();
         if (n.isInt()) return n.asInt();
         if (n.isLong()) return n.asLong();

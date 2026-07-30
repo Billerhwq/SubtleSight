@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, SideSheet, Spin, TextArea, Toast, ButtonGroup } from '@douyinfe/semi-ui';
-import { IconSend, IconAlertTriangle, IconSearch, IconGlobe, IconArticle, IconEdit, IconPlus, IconHelpCircle, IconTreeTriangleDown, IconDelete, IconFolderStroked, IconList, IconSave, IconRefresh } from '@douyinfe/semi-icons';
+import { IconSend, IconStop, IconAlertTriangle, IconSearch, IconGlobe, IconArticle, IconEdit, IconPlus, IconHelpCircle, IconTreeTriangleDown, IconDelete, IconFolderStroked, IconList, IconSave, IconRefresh } from '@douyinfe/semi-icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUi } from '../store/ui';
-import { postTurn, subscribeTurnEvents, confirmTurn, listSessions, updateSession, deleteSession, forkSession, listTurns } from '../api/agent';
+import { postTurn, subscribeTurnEvents, confirmTurn, cancelTurn, listSessions, updateSession, deleteSession, forkSession, listTurns } from '../api/agent';
 import { QaPanel } from './QaPanel';
-import type { TurnResponse, TurnEvent, AssistantSession } from '../types';
+import { AgentRunTimeline } from './AgentRunTimeline';
+import { applyAssistantRunEvent, createAssistantRun } from './agentRunModel';
+import type { AssistantRun, AssistantRunEvent, RunLink } from './agentRunModel';
+import type { AssistantSession } from '../types';
 
 // ── State machine ──
 type DrawerState =
@@ -19,7 +22,7 @@ type DrawerState =
   | { kind: 'error'; message: string };
 
 type CitationMeta = { resourceId: string; resourceType: string; locatorJson: string; resourceName: string };
-type ResLink = { label: string; documentId?: string; fileId?: string; url?: string };
+type ResLink = RunLink;
 type Message = { role: 'user' | 'agent'; text: string; tools?: string[]; confirmationRequired?: boolean; turnId?: string; kind?: 'thinking' | 'result'; links?: ResLink[]; citationMap?: Record<number, CitationMeta>; streaming?: boolean };
 
 // ── Derive page context from current route ──
@@ -40,7 +43,7 @@ function usePageContext(): Record<string, unknown> {
   return ctx;
 }
 
-const WELCOME: Message = { role: 'agent', text: '告诉我你想追踪什么、核实什么，或要建立怎样的发现视图。' };
+const WELCOME: Message = { role: 'agent', text: '告诉我你想追踪什么、核实什么，或要建立怎样的发现视图。', kind: 'result' };
 
 /** Build a navigation URL from a citation marker's metadata. */
 function buildCitationUrl(meta: CitationMeta): string | null {
@@ -165,7 +168,7 @@ function ContextSnapshot({ sessionId, turnId }: { sessionId: string; turnId: str
 }
 
 export function AgentDrawer(): ReactNode {
-  const { agentOpen, setAgentOpen } = useUi();
+  const { agentOpen, setAgentOpen, agentContext } = useUi();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'chat' | 'qa'>('chat');
@@ -179,9 +182,11 @@ export function AgentDrawer(): ReactNode {
   const [editTitle, setEditTitle] = useState('');
   const [showSessionList, setShowSessionList] = useState(false);
   const [expandedContextTurn, setExpandedContextTurn] = useState<string | null>(null);
+  const [runs, setRuns] = useState<Record<string, AssistantRun>>({});
   const sseRef = useRef<EventSource | null>(null);
-  const context = usePageContext();
-  const busy = state.kind === 'thinking';
+  const pageContext = usePageContext();
+  const context = { ...pageContext, ...agentContext };
+  const busy = state.kind === 'thinking' || state.kind === 'streaming';
 
   // Load sessions on mount
   const loadSessions = useCallback(async () => {
@@ -201,6 +206,14 @@ export function AgentDrawer(): ReactNode {
     if (es) { es.close(); sseRef.current = null; }
   }, []);
 
+  const updateRun = useCallback((turnId: string, event: AssistantRunEvent) => {
+    setRuns(previous => {
+      const current = previous[turnId];
+      if (!current) return previous;
+      return { ...previous, [turnId]: applyAssistantRunEvent(current, event) };
+    });
+  }, []);
+
   /** Subscribe to SSE and handle all standardized event types. */
   const subscribeTurn = useCallback((turnId: string) => {
     closeSse();
@@ -214,17 +227,30 @@ export function AgentDrawer(): ReactNode {
     };
 
     // planning_started → show thinking
-    onEvent('planning_started', () => setState({ kind: 'thinking', turnId }));
+    onEvent('planning_started', () => {
+      updateRun(turnId, { type: 'planning_started' });
+      setState({ kind: 'thinking', turnId });
+    });
 
     // plan_created → show plan summary in chat
     onEvent('plan_created', (data) => {
-      const steps = data.steps as number ?? 0;
       const rationale = data.rationale as string ?? '';
-      setMessages(prev => [...prev, {
-        role: 'agent',
-        text: `计划已生成：${steps} 步${rationale ? ' — ' + rationale : ''}`,
-        turnId,
-      }]);
+      const stepList = Array.isArray(data.stepList) ? data.stepList : [];
+      updateRun(turnId, {
+        type: 'plan_created',
+        rationale,
+        steps: stepList.map((item, index) => {
+          const step = item as Record<string, unknown>;
+          return {
+            ordinal: Number(step.ordinal ?? index + 1),
+            toolName: String(step.toolName ?? step.tool ?? ''),
+            toolId: step.toolId ? String(step.toolId) : undefined,
+            toolVersion: step.toolVersion ? String(step.toolVersion) : undefined,
+            label: step.label ? String(step.label) : undefined,
+            description: String(step.description ?? ''),
+          };
+        }),
+      });
     });
 
     // step_started → create a placeholder thinking step for streaming
@@ -232,54 +258,86 @@ export function AgentDrawer(): ReactNode {
       const ordinal = data.ordinal as number ?? 0;
       const toolName = data.toolName as string ?? '';
       const description = data.description as string ?? '';
-      setMessages(prev => [...prev, {
-        role: 'agent',
-        text: '',
-        tools: [toolName],
-        turnId,
-        kind: 'thinking',
-      }]);
+      updateRun(turnId, {
+        type: 'step_started', ordinal, toolName, description,
+        toolId: data.toolId ? String(data.toolId) : undefined,
+        toolVersion: data.toolVersion ? String(data.toolVersion) : undefined,
+        callId: data.callId ? String(data.callId) : undefined,
+        label: data.label ? String(data.label) : undefined,
+      });
+      setState({ kind: 'thinking', turnId });
+    });
+
+    // tool_progress → compact live line; full history remains expandable.
+    onEvent('tool_progress', (data) => {
+      const summary = String(data.summary ?? '正在执行工具');
+      updateRun(turnId, {
+        type: 'tool_progress',
+        ordinal: Number(data.ordinal ?? 0),
+        toolName: String(data.toolName ?? ''),
+        toolId: data.toolId ? String(data.toolId) : undefined,
+        toolVersion: data.toolVersion ? String(data.toolVersion) : undefined,
+        callId: data.callId ? String(data.callId) : undefined,
+        phase: String(data.phase ?? 'running'),
+        summary,
+        detail: data.detail ? String(data.detail) : undefined,
+      });
     });
 
     // step_chunk → append incremental content to the last thinking step
     onEvent('step_chunk', (data) => {
       const chunk = data.chunk as string ?? '';
       if (!chunk) return;
-      setMessages(prev => {
-        const copy = [...prev];
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].kind === 'thinking' && copy[i].turnId === turnId) {
-            copy[i] = { ...copy[i], text: copy[i].text + chunk };
-            return copy;
-          }
-        }
-        return copy;
-      });
+      const ordinal = Number(data.ordinal ?? 0);
+      updateRun(turnId, { type: 'step_chunk', ordinal, chunk });
     });
 
     // step_completed → replace the placeholder with final formatted result
     onEvent('step_completed', (data) => {
-      const success = data.success as boolean;
+      const toolResult = data.toolResult && typeof data.toolResult === 'object'
+        ? data.toolResult as Record<string, unknown> : undefined;
+      const status = toolResult ? String(toolResult.status ?? '') : '';
+      const success = status ? status === 'succeeded' : data.success !== false;
       const toolName = data.toolName as string ?? '';
-      const result = (data.result ?? {}) as Record<string, unknown>;
+      const protocolData = toolResult?.data;
+      const result = protocolData && typeof protocolData === 'object'
+        ? protocolData as Record<string, unknown>
+        : (data.result ?? {}) as Record<string, unknown>;
+      const effects = Array.isArray(toolResult?.effects)
+        ? toolResult.effects.map(item => {
+          const effect = item as Record<string, unknown>;
+          return {
+            type: String(effect.type ?? ''),
+            verified: effect.verified === true,
+            resource: effect.resource && typeof effect.resource === 'object'
+              ? effect.resource as { type?: string; id?: string } : undefined,
+          };
+        }) : undefined;
       const { text: resultText, links: resultLinks } = formatToolResult(toolName, success, result);
       const citationMap = (result.citationMap as Record<number, CitationMeta>) ?? undefined;
-      setMessages(prev => {
-        const copy = [...prev];
-        // Replace the last thinking step for this turn (created by step_started)
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i].kind === 'thinking' && copy[i].turnId === turnId && copy[i].tools?.[0] === toolName) {
-            copy[i] = { ...copy[i], text: resultText, links: resultLinks, citationMap };
-            return copy;
-          }
-        }
-        // Fallback: append new (backward compat)
-        return [...copy, { role: 'agent', text: resultText, tools: [toolName], turnId, kind: 'thinking', links: resultLinks, citationMap }];
+      const ordinal = Number(data.ordinal ?? 0);
+      updateRun(turnId, {
+        type: 'step_completed', ordinal, toolName, success,
+        toolId: toolResult?.toolId ? String(toolResult.toolId) : data.toolId ? String(data.toolId) : undefined,
+        toolVersion: toolResult?.toolVersion ? String(toolResult.toolVersion) : data.toolVersion ? String(data.toolVersion) : undefined,
+        callId: toolResult?.callId ? String(toolResult.callId) : data.callId ? String(data.callId) : undefined,
+        summary: resultText || String(toolResult?.content ?? ''),
+        links: resultLinks,
+        effects,
       });
-      if (success && (toolName.startsWith('draw_') || toolName.startsWith('create_') || toolName.startsWith('update_'))) {
+      const hasVerifiedResourceEffect = effects?.some(effect => effect.verified && effect.type.startsWith('resource.'));
+      if (success && (hasVerifiedResourceEffect || toolName.startsWith('draw_') || toolName.startsWith('create_') || toolName.startsWith('update_'))) {
         queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] });
         queryClient.invalidateQueries({ queryKey: ['knowledge-files'] });
         queryClient.invalidateQueries({ queryKey: ['knowledge-files-all'] });
+      }
+      if (success && (toolName === 'update_document' || toolName.startsWith('draw_'))) {
+        const documentId = result.documentId ?? result.id;
+        if (typeof documentId === 'string' && documentId) {
+          window.dispatchEvent(new CustomEvent('subtlesight:document-refresh', {
+            detail: { documentId },
+          }));
+        }
       }
     });
 
@@ -287,6 +345,7 @@ export function AgentDrawer(): ReactNode {
     onEvent('confirmation_required', (data) => {
       const toolName = data.toolName as string ?? '';
       const desc = data.description as string ?? '';
+      updateRun(turnId, { type: 'confirmation_required', toolName, description: desc });
       setState({ kind: 'awaiting_confirm', turnId, tools: [toolName], message: desc });
     });
 
@@ -294,6 +353,8 @@ export function AgentDrawer(): ReactNode {
     onEvent('streaming_chunk', (data) => {
       const chunk = data.chunk as string ?? '';
       if (!chunk) return;
+      updateRun(turnId, { type: 'streaming_chunk', chunk });
+      setState({ kind: 'streaming', turnId, chunk });
       setMessages(prev => {
         const copy = [...prev];
         for (let i = copy.length - 1; i >= 0; i--) {
@@ -307,9 +368,17 @@ export function AgentDrawer(): ReactNode {
     });
 
     // turn_completed → done, stop cursor
-    onEvent('turn_completed', () => {
+    onEvent('turn_completed', (data) => {
       setMessages(prev => prev.map(m => m.turnId === turnId ? { ...m, streaming: false } : m));
+      updateRun(turnId, { type: 'turn_completed', allSuccess: data.allSuccess !== false });
       setState({ kind: 'done' });
+      closeSse();
+    });
+
+    onEvent('turn_cancelled', (data) => {
+      updateRun(turnId, { type: 'turn_cancelled', message: String(data.message ?? '任务已停止') });
+      setState({ kind: 'done' });
+      closeSse();
     });
 
     // turn_result (backward compat) — only show if it adds real content
@@ -318,7 +387,7 @@ export function AgentDrawer(): ReactNode {
         const msg = data.message as string ?? '';
         const tools = data.tools as string[] ?? [];
         // Skip redundant "N 个步骤已执行" — step_completed already shows details
-        if (typeof msg === 'string' && /^\d+\s*个步骤已执行$/.test(msg)) return prev;
+        if (!msg || msg === '正在分析您的请求…' || (typeof msg === 'string' && /^\d+\s*个步骤已执行$/.test(msg))) return prev;
         const exists = prev.some(m => m.turnId === data.turnId && m.text === msg);
         if (exists) return prev;
         return [...prev, { role: 'agent', text: msg, tools, turnId: data.turnId as string }];
@@ -332,11 +401,13 @@ export function AgentDrawer(): ReactNode {
 
     // error
     onEvent('error', (data) => {
-      setState({ kind: 'error', message: data.message as string ?? '未知错误' });
+      const message = data.message as string ?? '未知错误';
+      updateRun(turnId, { type: 'error', message });
+      setState({ kind: 'error', message });
     });
 
     es.onerror = () => { es.close(); sseRef.current = null; };
-  }, [closeSse]);
+  }, [closeSse, queryClient, updateRun]);
 
   /** Format tool execution results — returns { text, links }. */
   const formatToolResult = (toolName: string, success: boolean, result: Record<string, unknown>): { text: string; links: ResLink[] } => {
@@ -448,25 +519,6 @@ export function AgentDrawer(): ReactNode {
         return { text: `${toolName} 完成。`, links: noLinks };
     }
   };
-  /** Format a short, human-friendly status from tool names. */
-  const summarizeTools = (tools: string[]): string => {
-    if (!tools || tools.length === 0) return '已处理请求。';
-    const labels: Record<string, string> = {
-      search_local: '正在搜索情报库…',
-      discover_web: '正在搜索全网资料…',
-      create_document: '正在创建文档…',
-      create_report: '正在生成报告…',
-      update_document: '正在更新文档…',
-      start_research: '正在启动研究…',
-      add_watch_target: '正在添加监控…',
-      ask_question: '正在检索知识库…',
-      draw_add_node: '正在绘制节点…',
-      draw_add_edge: '正在连接节点…',
-      delete: '正在处理删除请求…',
-    };
-    return tools.map(t => labels[t] ?? t).join('；');
-  };
-
   const send = async () => {
     if (!text.trim() || busy) return;
     const current = text.trim();
@@ -478,21 +530,27 @@ export function AgentDrawer(): ReactNode {
     try {
       const result = await postTurn({ message: current, context, sessionId: sessionId ?? undefined });
       if (result.sessionId && !sessionId) setSessionId(result.sessionId);
-      // Show human-friendly status instead of "N 个步骤已执行"
-      const displayMsg = result.confirmationRequired
-        ? result.message
-        : summarizeTools(result.tools ?? []);
-      const msg: Message = {
-        role: 'agent', text: displayMsg, tools: result.tools,
-        confirmationRequired: result.confirmationRequired, turnId: result.turnId,
-        kind: 'thinking',
-      };
-      setMessages(v => [...v, msg]);
+      setRuns(previous => ({ ...previous, [result.turnId]: createAssistantRun(result.turnId, current) }));
+      setMessages(previous => {
+        const copy = [...previous];
+        for (let index = copy.length - 1; index >= 0; index -= 1) {
+          if (copy[index].role === 'user' && !copy[index].turnId) {
+            copy[index] = { ...copy[index], turnId: result.turnId };
+            break;
+          }
+        }
+        return copy;
+      });
 
       if (result.confirmationRequired) {
+        updateRun(result.turnId, {
+          type: 'confirmation_required',
+          toolName: result.tools?.[0] ?? '',
+          description: result.message,
+        });
         setState({ kind: 'awaiting_confirm', turnId: result.turnId, tools: result.tools, message: result.message });
       } else {
-        setState({ kind: 'done' });
+        setState({ kind: 'thinking', turnId: result.turnId });
         subscribeTurn(result.turnId);
       }
     } catch (e) {
@@ -535,10 +593,10 @@ export function AgentDrawer(): ReactNode {
   };
 
   // ── Session management ──
-  const newSession = () => { closeSse(); setSessionId(null); setMessages([WELCOME]); setState({ kind: 'idle' }); setShowSessionList(false); };
+  const newSession = () => { closeSse(); setSessionId(null); setMessages([WELCOME]); setRuns({}); setState({ kind: 'idle' }); setShowSessionList(false); };
 
   const switchSession = async (sid: string) => {
-    closeSse(); setSessionId(sid); setShowSessionList(false); setState({ kind: 'idle' });
+    closeSse(); setSessionId(sid); setShowSessionList(false); setRuns({}); setState({ kind: 'idle' });
     try {
       const turns = await listTurns(sid);
       const msgs: Message[] = [WELCOME];
@@ -603,6 +661,32 @@ export function AgentDrawer(): ReactNode {
   };
 
   /** Render clickable resource links below a message. */
+  const openResourceLink = (link: ResLink) => {
+    if (link.documentId) {
+      window.dispatchEvent(new CustomEvent('subtlesight:document-refresh', {
+        detail: { documentId: link.documentId },
+      }));
+      navigate(`/knowledge?documentId=${link.documentId}`);
+    } else if (link.fileId) {
+      navigate(`/knowledge?fileId=${link.fileId}`);
+    } else if (link.url) {
+      window.open(link.url, '_blank');
+    }
+  };
+
+  const stopCurrentTurn = async () => {
+    const turnId = state.kind === 'thinking' || state.kind === 'streaming' ? state.turnId : undefined;
+    if (!turnId) return;
+    closeSse();
+    updateRun(turnId, { type: 'turn_cancelled', message: '任务已停止' });
+    setState({ kind: 'done' });
+    try {
+      await cancelTurn(turnId);
+    } catch (error) {
+      Toast.error(`停止任务失败：${(error as Error).message}`);
+    }
+  };
+
   const renderLinks = (m: Message) => {
     if (!m.links || m.links.length === 0) return null;
     return (
@@ -611,15 +695,7 @@ export function AgentDrawer(): ReactNode {
           <button
             key={i}
             className="agent-resource-link"
-            onClick={() => {
-              if (l.documentId) {
-                navigate(`/knowledge?documentId=${l.documentId}`);
-              } else if (l.fileId) {
-                navigate(`/knowledge?fileId=${l.fileId}`);
-              } else if (l.url) {
-                window.open(l.url, '_blank');
-              }
-            }}
+            onClick={() => openResourceLink(l)}
           >
             {l.label}
           </button>
@@ -662,7 +738,7 @@ export function AgentDrawer(): ReactNode {
     const groups: { turnId?: string; userMsg?: Message; thinking: Message[]; result: Message | null }[] = [];
     for (const m of messages) {
       if (m.role === 'user') {
-        groups.push({ userMsg: m, thinking: [], result: null });
+        groups.push({ turnId: m.turnId, userMsg: m, thinking: [], result: null });
       } else if (m.kind === 'result') {
         const last = groups[groups.length - 1];
         if (last && last.turnId === m.turnId) {
@@ -689,8 +765,10 @@ export function AgentDrawer(): ReactNode {
 
     return (
       <div className="chat-list">
-        {groups.map((g, gi) => (
-          <div key={gi}>
+        {groups.map((g, gi) => {
+          const run = g.turnId ? runs[g.turnId] : undefined;
+          return (
+          <div key={g.turnId ?? gi} className="agent-turn-group">
             {/* User message */}
             {g.userMsg && (
               <div className="chat user">
@@ -698,8 +776,10 @@ export function AgentDrawer(): ReactNode {
               </div>
             )}
 
+            {run && <AgentRunTimeline run={run} onOpenLink={openResourceLink} />}
+
             {/* Thinking chain — per-step collapsible cards */}
-            {g.thinking.length > 0 && (
+            {!run && g.thinking.length > 0 && (
               <div className="agent-thinking-chain">
                 <button
                   className="agent-thinking-toggle"
@@ -760,13 +840,15 @@ export function AgentDrawer(): ReactNode {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
 
   return (
     <SideSheet
+      className="subtlesight-agent-drawer"
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Button size="small" type={showSessionList ? 'primary' : 'tertiary'} onClick={() => setShowSessionList(v => !v)}>☰</Button>
@@ -779,7 +861,7 @@ export function AgentDrawer(): ReactNode {
       }
       visible={agentOpen}
       onCancel={() => { closeSse(); setTimeout(() => setAgentOpen(false), 0); }}
-      width={showSessionList ? 820 : 520}
+      width={showSessionList ? 870 : 590}
       footer={mode === 'qa' ? undefined : (
         <div className="agent-compose">
           <TextArea
@@ -790,8 +872,10 @@ export function AgentDrawer(): ReactNode {
           />
           {state.kind === 'error' ? (
             <Button theme="solid" type="danger" onClick={retry}>重试</Button>
+          ) : busy ? (
+            <Button className="agent-stop-button" aria-label="停止生成" title="停止生成" icon={<IconStop />} type="danger" onClick={stopCurrentTurn} />
           ) : (
-            <Button theme="solid" icon={<IconSend />} loading={busy} onClick={send} disabled={busy} />
+            <Button theme="solid" icon={<IconSend />} onClick={send} />
           )}
         </div>
       )}
@@ -831,13 +915,6 @@ export function AgentDrawer(): ReactNode {
         <QaPanel />
       ) : (
         <>
-          <div className="agent-intro">
-            <span className="brand-mark">S</span>
-            <div>
-              <strong>受控情报 Agent</strong>
-              <p>所有操作通过同一业务服务；发布等高风险动作必须确认。</p>
-            </div>
-          </div>
           {state.kind === 'thinking' && !messages.some(m => m.turnId !== undefined) && (
             <div style={{ textAlign: 'center', padding: '2rem' }}><Spin size="large" tip="正在分析…" /></div>
           )}

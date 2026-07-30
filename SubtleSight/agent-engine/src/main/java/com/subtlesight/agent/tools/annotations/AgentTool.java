@@ -9,10 +9,16 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
 public @interface AgentTool {
+    /** Stable internal identifier, normally domain.resource.action. */
+    String id() default "";
     /** Unique tool name (e.g. "search_local"). */
     String name();
+    /** Independently versioned tool contract. */
+    String version() default "1.0.0";
     /** Human-readable description for planners and LLM function calling. */
     String description();
+    /** Request strict JSON Schema conformance when the generated schema supports it. */
+    boolean strict() default true;
     /** Risk level. {@code HIGH} requires user confirmation. */
     RiskLevel risk() default RiskLevel.LOW;
 

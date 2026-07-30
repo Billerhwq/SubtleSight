@@ -13,7 +13,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 
 /** Controlled business-tool agent. Delegates to {@link AssistantOrchestrator} when wired; falls back to keyword routing. */
 public final class WebAgentService {
@@ -23,6 +25,7 @@ public final class WebAgentService {
     private final AssistantPorts.Repository assistantRepo;
     private final AssistantOrchestrator orchestrator;
     private final ExecutorService asyncExecutor;
+    private final Map<UUID, Future<?>> runningTurns = new ConcurrentHashMap<>();
 
     /** Constructor for tests and simple usage (no persistence, no orchestrator). */
     public WebAgentService(ToolExecutor executor){this(executor,null,null, null);}
@@ -45,7 +48,7 @@ public final class WebAgentService {
     public AgentResponse handle(AgentRequest request){
         UUID sessionId=request.sessionId();
         String message = sanitizeHiddenChars(request.message());
-        String contextJson=request.context()==null||request.context().isEmpty()?"{}":request.context().toString();
+        String contextJson=request.context()==null||request.context().isEmpty()?"{}":write(request.context());
 
         // Create turn record if repo is wired (unless turnId already provided — e.g. confirm flow)
         UUID turnId;
@@ -83,9 +86,15 @@ public final class WebAgentService {
             final UUID fSessionId = sessionId;
             if(asyncExecutor!=null){
                 final String fMessage = message;
-                asyncExecutor.submit(()->{
-                    orchestrator.orchestrate(fTurnId, fSessionId, fMessage, request.context(), false);
+                Future<?> future = asyncExecutor.submit(()->{
+                    try {
+                        orchestrator.orchestrate(fTurnId, fSessionId, fMessage, request.context(), false);
+                    } finally {
+                        runningTurns.remove(fTurnId);
+                    }
                 });
+                runningTurns.put(fTurnId, future);
+                if (future.isDone()) runningTurns.remove(fTurnId, future);
             }else{
                 // No executor — run synchronously (fallback for tests)
                 OrchestrationResult or = orchestrator.orchestrate(
@@ -132,6 +141,17 @@ public final class WebAgentService {
             assistantRepo.appendAudit(turnId,"tool_call","{\"tool\":\""+tool+"\",\"result\":\""+result.keySet().size()+" keys\"}");
         }
         return resp;
+    }
+
+    /** Best-effort cancellation for an asynchronously executing assistant turn. */
+    public boolean cancel(UUID turnId) {
+        Future<?> future = runningTurns.remove(turnId);
+        boolean cancelled = future != null && future.cancel(true);
+        if (assistantRepo != null) {
+            assistantRepo.updateTurnStatus(turnId, TurnStatus.CANCELLED, null, null);
+            assistantRepo.appendAudit(turnId, "cancelled", "{\"requested\":true}");
+        }
+        return cancelled;
     }
 
     String plan(String message){String m=message.toLowerCase(Locale.ROOT);if(m.contains("发布")||m.contains("publish"))return "request_publish";if(m.contains("报告")||m.contains("report"))return "create_report";if(m.contains("跟踪")||m.contains("watch"))return "add_watch_target";if(m.contains("研究")||m.contains("research")||m.contains("核实"))return "start_research";if(m.contains("视图")||m.contains("feed"))return "create_saved_view";if(m.contains("全网")||m.contains("web"))return "discover_web";if(m.contains("隐藏")||m.contains("反馈")||m.contains("hide")||m.contains("feedback"))return "submit_feedback";if(m.contains("搜索")||m.contains("查找")||m.contains("search")||m.contains("find"))return "search_local";return null;}

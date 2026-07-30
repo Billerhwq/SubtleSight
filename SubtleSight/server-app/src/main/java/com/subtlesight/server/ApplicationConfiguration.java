@@ -7,6 +7,9 @@ import com.subtlesight.agent.planner.Planner;
 import com.subtlesight.agent.planner.KeywordPlanner;
 import com.subtlesight.agent.planner.LlmPlanner;
 import com.subtlesight.agent.policy.ActionPolicy;
+import com.subtlesight.agent.tools.ToolModels.ToolCall;
+import com.subtlesight.agent.tools.ToolModels.ToolDefinition;
+import com.subtlesight.agent.tools.ToolModels.ToolResult;
 import com.subtlesight.agent.tools.ToolRegistry;
 import com.subtlesight.application.AssistantPorts;
 import com.subtlesight.application.Ports.ReaderProvider;
@@ -160,13 +163,34 @@ public class ApplicationConfiguration {
             AssistantPorts.Repository assistantRepository){
         // ToolExecutor adapter: bridges legacy interface to ToolRegistry
         WebAgentService.ToolExecutor executor = (tool, message, context) -> {
-            Map<String, Object> args = new LinkedHashMap<>(context);
+            ToolDefinition definition = toolRegistry.get(tool).orElse(null);
+            if (definition == null) return Map.of("error", "unknown tool: " + tool);
+            Map<String, Object> args = new LinkedHashMap<>();
+            definition.params().forEach(param -> {
+                if (context.containsKey(param.name())) args.put(param.name(), context.get(param.name()));
+            });
             // Fallback: if no explicit params, use message as query
             if (!args.containsKey("query") && !args.containsKey("title") && !args.containsKey("storyId")
                     && !args.containsKey("researchId") && !args.containsKey("name")) {
-                args.put("query", message);
+                if (definition.params().stream().anyMatch(param -> param.name().equals("query"))) {
+                    args.put("query", message);
+                }
             }
-            return toolRegistry.execute(tool, args);
+            String callId = "legacy_" + UUID.randomUUID();
+            ToolCall call = new ToolCall(
+                    com.subtlesight.agent.tools.ToolModels.PROTOCOL_VERSION,
+                    callId,
+                    definition.id(),
+                    definition.name(),
+                    definition.version(),
+                    args,
+                    ToolRegistry.resourceTarget(definition, args, context),
+                    context,
+                    definition.runtime().idempotency().mode()
+                            == com.subtlesight.agent.tools.ToolModels.IdempotencyMode.REQUIRED ? callId : null);
+            ToolResult result = toolRegistry.execute(call);
+            if (result.succeeded()) return result.data() == null ? Map.of() : result.data();
+            return Map.of("error", result.error() == null ? "tool failed" : result.error().message());
         };
         var threadPool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         return new WebAgentService(executor, assistantRepository, orchestrator, threadPool);

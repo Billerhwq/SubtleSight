@@ -15,4 +15,8 @@ public @interface ToolParam {
     String description();
     /** Whether this parameter must be provided. Default true. */
     boolean required() default true;
+    /** Optional complete JSON Schema override for complex arrays or objects. */
+    String schema() default "";
+    /** Optional allowed string values. */
+    String[] allowedValues() default {};
 }

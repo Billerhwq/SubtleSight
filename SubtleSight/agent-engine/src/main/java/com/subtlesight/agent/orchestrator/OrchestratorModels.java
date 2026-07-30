@@ -1,6 +1,10 @@
 package com.subtlesight.agent.orchestrator;
 
+import com.subtlesight.agent.tools.ToolModels.ToolResult;
+
 import java.util.List;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -13,7 +17,8 @@ public final class OrchestratorModels {
         public PlanStep {
             Objects.requireNonNull(tool);
             requireText(description, "description");
-            params = params == null ? Map.of() : Map.copyOf(params);
+            params = params == null ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(params));
         }
     }
 
@@ -26,10 +31,16 @@ public final class OrchestratorModels {
     }
 
     public record ToolExecution(int ordinal, String tool, Map<String, Object> result,
-                                 boolean success, String error) {
+                                 boolean success, String error, ToolResult protocolResult) {
+        public ToolExecution(int ordinal, String tool, Map<String, Object> result,
+                             boolean success, String error) {
+            this(ordinal, tool, result, success, error, null);
+        }
+
         public ToolExecution {
             Objects.requireNonNull(tool);
-            result = result == null ? Map.of() : Map.copyOf(result);
+            result = result == null ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(result));
             error = error == null ? "" : error;
         }
     }

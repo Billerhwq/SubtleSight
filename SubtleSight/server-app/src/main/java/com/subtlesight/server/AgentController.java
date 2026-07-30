@@ -1,6 +1,9 @@
 package com.subtlesight.server;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.subtlesight.agent.WebAgentService;
+import com.subtlesight.agent.tools.ToolModels;
+import com.subtlesight.agent.tools.ToolRegistry;
 import com.subtlesight.application.AssistantPorts;
 import com.subtlesight.domain.Models.AgentRequest;
 import com.subtlesight.domain.Models.AgentResponse;
@@ -24,12 +27,26 @@ public class AgentController {
     private final WebAgentService agentService;
     private final SseHub sseHub;
     private final AssistantPorts.Repository assistantRepo;
+    private final ToolRegistry toolRegistry;
+    private final ObjectMapper json;
     private final Map<UUID, PendingTurn> pending = new ConcurrentHashMap<>();
 
-    public AgentController(WebAgentService agentService, SseHub sseHub, AssistantPorts.Repository assistantRepo) {
+    public AgentController(WebAgentService agentService, SseHub sseHub,
+                           AssistantPorts.Repository assistantRepo, ToolRegistry toolRegistry,
+                           ObjectMapper json) {
         this.agentService = agentService;
         this.sseHub = sseHub;
         this.assistantRepo = assistantRepo;
+        this.toolRegistry = toolRegistry;
+        this.json = json;
+    }
+
+    /** Read-only catalog for diagnostics and clients that render tool metadata. */
+    @GetMapping("/tools")
+    public ResponseEntity<?> tools() {
+        return ResponseEntity.ok(Map.of(
+                "protocolVersion", ToolModels.PROTOCOL_VERSION,
+                "tools", toolRegistry.definitions()));
     }
 
     /** Send a message, returns turnId and sessionId. The client subscribes to SSE for results. */
@@ -75,6 +92,12 @@ public class AgentController {
         UUID tid = UUID.fromString(turnId);
         PendingTurn pendingTurn = pending.remove(tid);
         if (pendingTurn == null) {
+            pendingTurn = assistantRepo.getTurn(tid)
+                    .filter(turn -> turn.status() == com.subtlesight.domain.AssistantModels.TurnStatus.AWAITING_CONFIRM)
+                    .map(turn -> new PendingTurn(turn.content(), parseContext(turn.contextJson()), turn.sessionId()))
+                    .orElse(null);
+        }
+        if (pendingTurn == null) {
             // Already confirmed or expired — notify frontend to reset state
             sseHub.publishToTurn(turnId, "confirmation_expired", Map.of(
                     "turnId", turnId, "message", "该操作已过期或已处理"
@@ -101,6 +124,20 @@ public class AgentController {
         }
 
         return ResponseEntity.noContent().build();
+    }
+
+    /** Stop an asynchronously executing turn. */
+    @PostMapping("/turns/{turnId}/cancel")
+    public ResponseEntity<?> cancel(@PathVariable String turnId) {
+        UUID tid = UUID.fromString(turnId);
+        boolean interrupted = agentService.cancel(tid);
+        pending.remove(tid);
+        sseHub.publishToTurn(turnId, "turn_cancelled", Map.of(
+                "turnId", turnId,
+                "interrupted", interrupted,
+                "message", "任务已停止"
+        ));
+        return ResponseEntity.ok(Map.of("cancelled", true, "interrupted", interrupted));
     }
 
     /** List recent sessions. */
@@ -175,6 +212,16 @@ public class AgentController {
         // Truncate at word boundary
         int cut = cleaned.lastIndexOf(' ', 30);
         return (cut > 15 ? cleaned.substring(0, cut) : cleaned.substring(0, 30)) + "…";
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseContext(String contextJson) {
+        if (contextJson == null || contextJson.isBlank()) return Map.of();
+        try {
+            return json.readValue(contextJson, Map.class);
+        } catch (Exception ignored) {
+            return Map.of();
+        }
     }
 
     public record TurnRequest(

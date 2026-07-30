@@ -15,6 +15,7 @@ import {
   IconSave,
 } from '@douyinfe/semi-icons';
 import { ApiError, del, get, post, put } from '../api/client';
+import { useUi } from '../store/ui';
 import {
   DEFAULT_DRAWING,
   addNode,
@@ -25,7 +26,6 @@ import {
 } from '../knowledgeEditorModel';
 import type { DrawingModel, DrawNode, DrawNodeKind } from '../knowledgeEditorModel';
 import type {
-  KnowledgeAiSuggestion,
   KnowledgeDocument,
   KnowledgeDocumentVersion,
   KnowledgeFolder,
@@ -63,15 +63,6 @@ function relativeTime(iso: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
   return new Date(iso).toLocaleDateString('zh-CN');
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\n', '<br>');
 }
 
 function edgePath(model: DrawingModel, fromId: string, toId: string): string | null {
@@ -400,6 +391,7 @@ function DrawBoard({ model, onChange, onInsert }: DrawBoardProps): ReactNode {
 
 export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlockId, highlightNodeId }: { embedded?: boolean; onBack?: () => void; documentId?: string | null; highlightBlockId?: string; highlightNodeId?: string }): ReactNode {
   const queryClient = useQueryClient();
+  const openAgent = useUi(state => state.openAgent);
   const [searchParams, setSearchParams] = useSearchParams();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const qc = queryClient as any;
@@ -419,10 +411,6 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [versions, setVersions] = useState<KnowledgeDocumentVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiInstruction, setAiInstruction] = useState('完善结构并提炼要点');
-  const [aiSuggestion, setAiSuggestion] = useState<KnowledgeAiSuggestion | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
   const draftRef = useRef<KnowledgeDocument | null>(null);
   const lastPersistedRef = useRef('');
   const savePromiseRef = useRef<Promise<boolean> | null>(null);
@@ -499,6 +487,17 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
     }
   }, [currentId, loadDocument]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ documentId?: string }>).detail;
+      if (detail?.documentId && detail.documentId === currentId) {
+        void loadDocument(detail.documentId);
+      }
+    };
+    window.addEventListener('subtlesight:document-refresh', refresh);
+    return () => window.removeEventListener('subtlesight:document-refresh', refresh);
+  }, [currentId, loadDocument]);
+
   // Highlight target block/node from citation navigation
   useEffect(() => {
     if (!draft || loadingDocument) return;
@@ -556,17 +555,14 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
         if (!data.success) return;
         const tool = data.toolName as string ?? '';
         if (!tool.startsWith('draw_') && tool !== 'update_document') return;
-        const resultDocId = data.result?.documentId as string | undefined;
+        const resultDocId = (data.result?.documentId ?? data.result?.id) as string | undefined;
         // Always refresh the document list
         qc.invalidateQueries({ queryKey: ['knowledge-documents'] });
         qc.invalidateQueries({ queryKey: ['knowledge-files'] });
         qc.invalidateQueries({ queryKey: ['knowledge-files-all'] });
         // If agent modified the document we're currently editing, reload draft
         if (resultDocId && currentId === resultDocId) {
-          get<KnowledgeDocument>(`/knowledge/documents/${resultDocId}`).then(updated => {
-            draftRef.current = updated;
-            setDraft(updated);
-            lastPersistedRef.current = draftSignature(updated);
+          loadDocument(resultDocId).then(() => {
             Toast.info('AI 助手已更新画布');
           }).catch(() => { /* ignore reload failures */ });
         }
@@ -574,7 +570,7 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
     };
     es.addEventListener('step_completed', handler);
     return () => { es.removeEventListener('step_completed', handler); es.close(); };
-  }, [currentId, qc]);
+  }, [currentId, loadDocument, qc]);
 
   const saveCurrent = useCallback(async (changeSummary = '自动保存', notify = false): Promise<boolean> => {
     if (savePromiseRef.current) await savePromiseRef.current;
@@ -635,6 +631,17 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
     const timer = window.setTimeout(() => void saveCurrent('自动保存'), 1_200);
     return () => window.clearTimeout(timer);
   }, [currentSignature, draft, saveCurrent]);
+
+  const openAgentForCurrentDocument = useCallback(async () => {
+    const saved = await saveCurrent('打开 AI 助手前保存');
+    const current = draftRef.current;
+    if (!saved || !current) return;
+    openAgent({
+      currentPage: 'knowledge',
+      currentDocId: current.id,
+      currentDocVersion: current.version,
+    });
+  }, [openAgent, saveCurrent]);
 
   const selectDocument = async (id: string) => {
     if (id === currentId) return;
@@ -715,33 +722,6 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
     } catch (error) {
       Toast.error(error instanceof Error ? error.message : '恢复失败');
     }
-  };
-
-  const requestAi = async () => {
-    const current = draftRef.current;
-    if (!current) return;
-    setAiLoading(true);
-    setAiSuggestion(null);
-    try {
-      const { from, to } = ed?.state.selection ?? { from: 0, to: 0 };
-      const selectedText = ed && from !== to ? ed.state.doc.textBetween(from, to, ' ') : '';
-      const result = await post<KnowledgeAiSuggestion>(`/knowledge/documents/${current.id}/ai-assist`, {
-        instruction: aiInstruction,
-        selectedText,
-      });
-      setAiSuggestion(result);
-    } catch (error) {
-      Toast.error(error instanceof Error ? error.message : 'AI 辅助失败');
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  const insertAiSuggestion = () => {
-    if (!ed || !aiSuggestion) return;
-    ed.chain().focus().insertContent(`<p>${escapeHtml(aiSuggestion.suggestion)}</p>`).run();
-    setAiOpen(false);
-    Toast.success('AI 建议已插入正文，等待自动保存');
   };
 
   const updateDrawing = (next: DrawingModel) => updateDraft({ drawingJson: stringifyDrawing(next) });
@@ -830,7 +810,13 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
             <span />
             {saveCopy}
           </div>
-          <Button theme="borderless" icon={<IconEdit />} style={{ color: '#fff' }} onClick={() => setAiOpen(true)} disabled={!draft}>AI 辅助</Button>
+          <Button
+            theme="borderless"
+            icon={<IconEdit />}
+            style={{ color: '#fff' }}
+            onClick={() => void openAgentForCurrentDocument()}
+            disabled={!draft}
+          >AI 辅助</Button>
           <Button theme="borderless" icon={<IconArticle />} style={{ color: '#fff' }} onClick={() => void openVersions()} disabled={!draft}>历史</Button>
           <Button icon={<IconSave />} style={{ color: '#fff' }} onClick={() => void saveCurrent('手动保存', true)} disabled={!draft}>保存</Button>
           {!embedded && <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => void createDocument()}>新建</Button>}
@@ -949,40 +935,6 @@ export function KnowledgeEditorPage({ embedded, onBack, documentId, highlightBlo
         )}
       </Modal>
 
-      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-      <Modal
-        title="AI 文档助手"
-        visible={aiOpen}
-        width={640}
-        onCancel={() => { setTimeout(() => setAiOpen(false), 0); }}
-        footer={(
-          <div className="ke-ai-footer">
-            <Button onClick={() => setAiOpen(false)}>取消</Button>
-            <Button loading={aiLoading} onClick={() => void requestAi()}>生成建议</Button>
-            <Button theme="solid" type="primary" disabled={!aiSuggestion} onClick={insertAiSuggestion}>插入正文</Button>
-          </div>
-        ) as any}
-      >
-        <label className="ke-modal-label">希望 AI 做什么？</label>
-        <Input value={aiInstruction} onChange={setAiInstruction} placeholder="例如：提炼要点、完善结构、生成验收标准" />
-        <div className="ke-ai-presets">
-          {['完善结构并提炼要点', '生成可执行的下一步', '补充风险与验收标准'].map(value => (
-            <button key={value} onClick={() => setAiInstruction(value)}>{value}</button>
-          ))}
-        </div>
-        <label className="ke-modal-label">生成结果</label>
-        <textarea
-          className="ke-ai-result"
-          value={aiSuggestion?.suggestion ?? ''}
-          onChange={event => setAiSuggestion(current => current ? { ...current, suggestion: event.target.value } : null)}
-          placeholder={aiLoading ? '正在分析当前文档…' : '点击“生成建议”，结果会显示在这里。'}
-        />
-        {aiSuggestion ? (
-          <div className="ke-ai-provider">
-            {aiSuggestion.fallback ? '当前未配置在线模型，使用本地规则建议' : `由 ${aiSuggestion.provider} · ${aiSuggestion.model} 生成`}
-          </div>
-        ) : <></>}
-      </Modal>
     </div>
   );
 }

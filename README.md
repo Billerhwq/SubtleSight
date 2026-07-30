@@ -12,6 +12,7 @@ SubtleSight 是一个本地优先、Web-first 的单机情报研究工作台。�
 - 情报发现：Story 聚合、信号分析、全文搜索和混合检索
 - 知识库：文件夹与文件管理、上传下载、全文搜索、多格式在线预览
 - 编辑与 Draw：TipTap 富文本、自动保存、乐观版本检查、版本历史、恢复、AI 辅助和可编辑流程图
+- Agent 助手：统一工具协议、多步骤编排、SSE 实时进度、工具效果验证和文档/Draw 自动同步
 - 研究与输出：Deep Research、证据管理、Watchlist、财经日历、报告生成与导出
 - 本地数据闭环：SQLite WAL、内容寻址 Blob Store、Lucene 索引、备份与恢复
 
@@ -22,8 +23,7 @@ SubtleSight 是一个本地优先、Web-first 的单机情报研究工作台。�
 | 功能 | 地址 |
 |---|---|
 | 发现 | `http://localhost:5173/discover.html` |
-| 知识库 | `http://localhost:5173/knowledge.html` |
-| 编辑与 Draw | `http://localhost:5173/knowledge-editor.html#/knowledge/editor` |
+| 知识库、编辑与 Draw | `http://localhost:5173/knowledge-editor.html#/knowledge` |
 | 财经日历 | `http://localhost:5173/calendar.html` |
 | Watchlist | `http://localhost:5173/watchlist.html` |
 | 报告 | `http://localhost:5173/reports.html` |
@@ -43,9 +43,35 @@ SubtleSight 是一个本地优先、Web-first 的单机情报研究工作台。�
 
 后端是包含 26 个模块的 Maven 工程，覆盖领域模型、应用服务、采集连接器、研究与报告引擎、SQLite/Blob/Lucene 基础设施、Spring Boot 服务和验收测试。
 
+## Agent 与统一工具协议
+
+`agent-engine` 使用协议版本 `1.0` 的统一工具模型，所有工具都通过同一套注册、校验、执行和审计流程：
+
+- `ToolDefinition`：稳定工具 ID/版本、严格 JSON Schema、风险级别、权限、并发与幂等策略、效果声明和展示文案
+- `ToolCall`：调用 ID、工具 ID/版本、结构化参数、资源目标、运行上下文和幂等键
+- `ToolResult`：统一状态、结构化数据、可验证资源效果、错误对象、展示内容和执行指标
+- OpenAI 与 Claude 适配器从同一份定义生成各自的 tool schema，不在工具层混入模型配置
+- 写工具按资源串行执行，并验证资源版本变化；重复调用可使用幂等缓存
+
+工具目录可通过以下接口查看：
+
+```text
+GET /api/v1/agent/tools
+```
+
+AI 助手通过 SSE 推送 `planning_started`、`plan_created`、`step_started`、`tool_progress`、`step_completed` 和 `turn_completed`。界面运行时仅覆盖显示最新 1–2 行活动，完整记录可展开；已验证的写操作显示“完成 · 已验证”。文档和 Draw 工具完成后，当前编辑器会按文档 ID 自动刷新。
+
 ## 快速开始
 
 前置环境：JDK 21、Maven 3.9、Node.js 20 和 pnpm。
+
+AI Provider 必须通过环境变量配置，不要把 API Key 写入仓库：
+
+```powershell
+$env:SUBTLESIGHT_OPENAI_BASE_URL='https://api.openai.com/v1'
+$env:SUBTLESIGHT_OPENAI_API_KEY='your-api-key'
+$env:SUBTLESIGHT_OPENAI_MODEL='gpt-4.1-mini'
+```
 
 ### 开发模式
 
@@ -98,6 +124,8 @@ cd SubtleSight
 /api/v1/knowledge/documents/{id}/versions
 /api/v1/knowledge/documents/{id}/versions/{version}/restore
 /api/v1/knowledge/documents/{id}/ai-assist
+/api/v1/agent/tools
+/api/v1/agent/turns/{turnId}/events
 ```
 
 ## 验证

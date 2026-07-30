@@ -219,6 +219,15 @@ public class KnowledgeService {
         return saved;
     }
 
+    /** Update only the Draw payload while preserving the document body and metadata. */
+    @Transactional
+    public KnowledgeDocument updateDrawing(UUID id, String drawingJson,
+                                           int expectedVersion, String changeSummary) {
+        KnowledgeDocument existing = requireDocument(id);
+        return updateDocument(id, existing.folderId(), existing.title(), existing.contentHtml(),
+                drawingJson, expectedVersion, changeSummary);
+    }
+
     public List<KnowledgeDocumentVersion> documentVersions(UUID id) {
         requireDocument(id);
         return repository.listDocumentVersions(id);

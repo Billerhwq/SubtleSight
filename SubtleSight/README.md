@@ -42,7 +42,7 @@ SubtleSight 是一个本地优先、Web-first 的单机全能情报工作台。�
 | `signal-engine` | 引擎 | 信号视图处理 |
 | `evidence-engine` | 引擎 | 证据管理 |
 | `document-engine` | 引擎 | 文档解析处理 |
-| `agent-engine` | 引擎 | Web Agent 服务 |
+| `agent-engine` | 引擎 | 统一工具协议、规划编排、策略校验、SSE 事件与执行审计 |
 | `calendar-engine` | 引擎 | 金融日历处理 |
 | `source-connectors` | 连接器 | RSS、Hacker News、GitHub Trending、Arxiv、Product Hunt、HuggingFace |
 | `calendar-connectors` | 连接器 | 日历数据源接入（ICS/HTML） |
@@ -68,6 +68,14 @@ SubtleSight 是一个本地优先、Web-first 的单机全能情报工作台。�
 - **JDK 21+**
 - **Maven 3.9+**
 - **Node.js 20+**
+
+AI Provider 仅通过环境变量配置。请勿在 `application.yml` 或提交记录中保存真实密钥：
+
+```bash
+SUBTLESIGHT_OPENAI_BASE_URL=https://api.openai.com/v1
+SUBTLESIGHT_OPENAI_API_KEY=your-api-key
+SUBTLESIGHT_OPENAI_MODEL=gpt-4.1-mini
+```
 
 ### 开发模式（前后端分离）
 
@@ -104,6 +112,30 @@ java -jar server-app/target/server-app-1.0.0-SNAPSHOT.jar
 ```
 
 访问 `http://127.0.0.1:8080`（React SPA + API 同一端口）。
+
+---
+
+## Agent 工具协议与实时执行
+
+Agent 工具协议版本为 `1.0`，核心对象为 `ToolDefinition`、`ToolCall` 和 `ToolResult`。工具定义包含稳定 ID/版本、严格 JSON Schema、风险级别、运行策略、权限、幂等规则、资源效果声明与前端展示元数据。注册表统一完成递归参数校验、工具执行、结构化错误处理、效果/版本验证和幂等缓存。
+
+OpenAI 与 Claude 的工具描述均由同一份定义适配生成，模型配置不属于工具协议。当前工具目录可通过以下接口读取：
+
+```http
+GET /api/v1/agent/tools
+```
+
+执行过程使用 SSE 推送计划、步骤、工具进度、效果验证和最终结果。助手对话框默认只显示最新 1–2 行活动，避免持续向下展开；用户可展开完整执行历史。`create_document`、`update_document` 和 `draw_diagram` 等写工具返回已验证的资源效果，完成后知识库编辑器会自动同步最新版本。
+
+主要 Agent 接口：
+
+| 方法 | 端点 | 描述 |
+|---|---|---|
+| `GET` | `/api/v1/agent/tools` | 获取协议版本和工具目录 |
+| `POST` | `/api/v1/agent/turn` | 提交助手任务 |
+| `GET` | `/api/v1/agent/turns/{turnId}/events` | 订阅任务 SSE 事件 |
+| `POST` | `/api/v1/agent/turns/{turnId}/confirm` | 确认高风险步骤 |
+| `POST` | `/api/v1/agent/turns/{turnId}/cancel` | 停止任务 |
 
 ---
 
