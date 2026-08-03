@@ -216,6 +216,19 @@ public final class LlmPlanner implements Planner {
                     "在 Draw 中绘制流程图", params));
         }
 
+        // Normalize any draw_diagram step whose nodes may lack the 'id' key
+        // (LLMs often omit it), so they pass JSON Schema validation.
+        List<PlanStep> normalized2 = new ArrayList<>(completed.size());
+        for (PlanStep step : completed) {
+            if ("draw_diagram".equals(step.tool())) {
+                normalized2.add(new PlanStep(step.ordinal(), step.tool(), step.description(),
+                        ensureDrawNodeIds(step.params())));
+            } else {
+                normalized2.add(step);
+            }
+        }
+        completed = normalized2;
+
         List<PlanStep> renumbered = new ArrayList<>(completed.size());
         for (int i = 0; i < completed.size(); i++) {
             PlanStep step = completed.get(i);
@@ -251,6 +264,28 @@ public final class LlmPlanner implements Planner {
         params.put("edges", edges);
         params.put("autoLayout", true);
         return params;
+    }
+
+    /** Ensure every node in a draw_diagram params has an {@code id} key
+     * so the JSON Schema required-field validation passes. Missing keys
+     * are set to {@code null} — the tool auto-generates real IDs. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> ensureDrawNodeIds(Map<String, Object> params) {
+        Object rawNodes = params.get("nodes");
+        if (!(rawNodes instanceof List<?> list)) return params;
+        List<Map<String, Object>> fixedNodes = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> m) {
+                Map<String, Object> node = new LinkedHashMap<>((Map<String, Object>) m);
+                if (!node.containsKey("id")) {
+                    node.put("id", null);
+                }
+                fixedNodes.add(node);
+            }
+        }
+        Map<String, Object> fixed = new LinkedHashMap<>(params);
+        fixed.put("nodes", fixedNodes);
+        return fixed;
     }
 
     private static List<String> extractArrowLabels(String message) {

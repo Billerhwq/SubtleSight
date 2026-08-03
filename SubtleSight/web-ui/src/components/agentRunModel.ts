@@ -1,7 +1,17 @@
+import type { CitationMeta, Reference } from './citations';
+
 export type RunStatus = 'planning' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type RunStepStatus = 'waiting' | 'active' | 'completed' | 'failed' | 'paused';
 
 export type RunLink = { label: string; documentId?: string; fileId?: string; url?: string };
+
+/** A structured search-result record shown in the execution-details panel (highlightable). */
+export type RunStepRecord = {
+  resourceId: string;
+  label: string;
+  detail?: string;
+  url?: string;
+};
 
 export type RunStep = {
   ordinal: number;
@@ -14,6 +24,8 @@ export type RunStep = {
   status: RunStepStatus;
   summary: string;
   links: RunLink[];
+  records?: RunStepRecord[];
+  citationMap?: Record<number, CitationMeta>;
   effects?: Array<{ type: string; verified: boolean; resource?: { type?: string; id?: string } }>;
 };
 
@@ -32,6 +44,7 @@ export type AssistantRun = {
   activities: RunActivity[];
   nextActivityId: number;
   allSuccess?: boolean;
+  references?: Reference[];
 };
 
 export type AssistantRunEvent =
@@ -40,10 +53,10 @@ export type AssistantRunEvent =
   | { type: 'step_started'; ordinal: number; toolName: string; toolId?: string; toolVersion?: string; callId?: string; label?: string; description: string }
   | { type: 'step_chunk'; ordinal: number; chunk: string }
   | { type: 'tool_progress'; ordinal: number; toolName: string; toolId?: string; toolVersion?: string; callId?: string; phase: string; summary: string; detail?: string }
-  | { type: 'step_completed'; ordinal: number; toolName: string; toolId?: string; toolVersion?: string; callId?: string; success: boolean; summary: string; links?: RunLink[]; effects?: RunStep['effects'] }
+  | { type: 'step_completed'; ordinal: number; toolName: string; toolId?: string; toolVersion?: string; callId?: string; success: boolean; summary: string; links?: RunLink[]; records?: RunStepRecord[]; citationMap?: Record<number, CitationMeta>; effects?: RunStep['effects'] }
   | { type: 'confirmation_required'; toolName: string; description: string }
   | { type: 'streaming_chunk'; chunk: string }
-  | { type: 'turn_completed'; allSuccess: boolean }
+  | { type: 'turn_completed'; allSuccess: boolean; answer?: string; references?: Reference[] }
   | { type: 'turn_cancelled'; message: string }
   | { type: 'error'; message: string };
 
@@ -147,6 +160,8 @@ export function applyAssistantRunEvent(run: AssistantRun, event: AssistantRunEve
         status,
         summary: terminal ? current?.summary || event.summary : current?.summary ?? '',
         links: current?.links ?? [],
+        records: current?.records,
+        citationMap: current?.citationMap,
         effects: current?.effects,
       });
       const withStatus = { ...next, status: paused ? 'paused' as const : terminal ? next.status : 'running' as const };
@@ -167,6 +182,8 @@ export function applyAssistantRunEvent(run: AssistantRun, event: AssistantRunEve
         status: event.success ? 'completed' : 'failed',
         summary: event.summary,
         links: event.links ?? current?.links ?? [],
+        records: event.records ?? current?.records,
+        citationMap: event.citationMap ?? current?.citationMap,
         effects: event.effects ?? current?.effects,
       });
       return appendActivities(next, event.ordinal, event.summary);
@@ -181,7 +198,12 @@ export function applyAssistantRunEvent(run: AssistantRun, event: AssistantRunEve
       return appendActivities({ ...run, status: 'running' }, active?.ordinal ?? 0, event.chunk);
     }
     case 'turn_completed':
-      return { ...run, status: event.allSuccess ? 'completed' : 'failed', allSuccess: event.allSuccess };
+      return {
+        ...run,
+        status: event.allSuccess ? 'completed' : 'failed',
+        allSuccess: event.allSuccess,
+        references: event.references ?? run.references,
+      };
     case 'turn_cancelled':
       return appendActivities({ ...run, status: 'cancelled', allSuccess: false }, 0, event.message || '任务已停止');
     case 'error':

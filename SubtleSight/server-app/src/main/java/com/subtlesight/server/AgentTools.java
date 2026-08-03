@@ -79,15 +79,16 @@ public class AgentTools {
             return (Map<String, Object>) m;
         }).toList();
 
-        Map<Integer, Map<String, String>> citationMap = new LinkedHashMap<>();
+        Map<Integer, Map<String, Object>> citationMap = new LinkedHashMap<>();
         int idx = 1;
         for (var hit : hits) {
             String type = (String) hit.get("type");
-            Map<String, String> meta = new LinkedHashMap<>();
+            Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("resourceId", (String) hit.get("id"));
-            meta.put("resourceType", type != null ? type.toUpperCase() : "INTELLIGENCE");
-            meta.put("locatorJson", "{}");
-            meta.put("resourceName", (String) hit.get("title"));
+            // story → STORY; document hits carry a DocumentVersion id (not a knowledge doc id)
+            meta.put("resourceType", "story".equals(type) ? "STORY" : "DOCUMENTVERSION");
+            meta.putAll(enrichSearchHit(type, (String) hit.get("id"),
+                    (String) hit.get("title"), (String) hit.get("snippet")));
             citationMap.put(idx++, meta);
         }
 
@@ -252,6 +253,7 @@ public class AgentTools {
             var m = new LinkedHashMap<String, Object>();
             m.put("type", "file"); m.put("id", f.id().toString());
             m.put("name", f.name()); m.put("ext", f.ext()); m.put("path", f.path());
+            m.put("createdAt", f.createdAt().toString());
             return (Map<String, Object>) m;
         }).collect(java.util.stream.Collectors.toList());
 
@@ -264,6 +266,7 @@ public class AgentTools {
                     m.put("type", "document"); m.put("id", d.id().toString());
                     m.put("title", d.title()); m.put("version", d.version());
                     m.put("folderId", d.folderId() == null ? "" : d.folderId().toString());
+                    m.put("createdAt", d.createdAt().toString());
                     return (Map<String, Object>) m;
                 })
                 .collect(java.util.stream.Collectors.toList());
@@ -272,15 +275,18 @@ public class AgentTools {
         all.addAll(matchedFiles);
         all.addAll(matchedDocs);
 
-        Map<Integer, Map<String, String>> citationMap = new LinkedHashMap<>();
+        Map<Integer, Map<String, Object>> citationMap = new LinkedHashMap<>();
         int idx = 1;
         for (var item : all) {
-            Map<String, String> meta = new LinkedHashMap<>();
+            Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("resourceId", (String) item.get("id"));
             meta.put("resourceType", ((String) item.get("type")).toUpperCase());
             meta.put("locatorJson", "{}");
+            meta.put("exactQuote", "");
             meta.put("resourceName", item.containsKey("title")
                     ? (String) item.get("title") : (String) item.get("name"));
+            Object createdAt = item.get("createdAt");
+            if (createdAt != null) meta.put("publishedAt", createdAt.toString());
             citationMap.put(idx++, meta);
         }
 
@@ -333,11 +339,6 @@ public class AgentTools {
             title = sanitizeTitle(title);
             String docContent = contentHtml != null ? contentHtml : "<h2>" + title + "</h2><p></p>";
             var doc = knowledge.createDocument(fid, title, docContent, null);
-            // Generate AI title asynchronously
-            if (ai != null) {
-                String finalTitle = title;
-                Thread.startVirtualThread(() -> autoTitle(doc.id(), finalTitle, docContent));
-            }
             return Map.<String, Object>of(
                     "id", doc.id().toString(),
                     "title", doc.title(),
@@ -503,11 +504,11 @@ public class AgentTools {
             verifying = "正在校验 Draw 数据", succeeded = "Draw 已更新")
     public Map<String, Object> drawDiagram(
             @ToolParam(name = "documentId", description = "目标文档 ID") String documentId,
-            @ToolParam(name = "nodes", description = "节点列表，每项 {kind?, label, x?, y?, id?}", schema = """
+            @ToolParam(name = "nodes", description = "节点列表，每项 {kind?, label, x?, y?, id?}；x/y/id/kind 可省略，缺省时自动定位", schema = """
                     {
                       "type":"array","minItems":1,"maxItems":100,
                       "items":{"type":"object","additionalProperties":false,
-                        "required":["id","kind","label","x","y"],
+                        "required":["label"],
                         "properties":{
                           "id":{"type":["string","null"]},
                           "kind":{"type":["string","null"],"enum":["rect","pill","accent","purple","note","diamond",null]},
@@ -752,7 +753,7 @@ public class AgentTools {
             // Build answer view
             var view = qa.answerView(answerId);
             List<Map<String, Object>> citations = new ArrayList<>();
-            Map<Integer, Map<String, String>> citationMap = new LinkedHashMap<>();
+            Map<Integer, Map<String, Object>> citationMap = new LinkedHashMap<>();
             int idx = 1;
             for (var claim : view.claims()) {
                 for (var citation : claim.citations()) {
@@ -769,11 +770,13 @@ public class AgentTools {
                     citations.add(c);
 
                     // Build citation map entry for inline marker rendering
-                    Map<String, String> meta = new LinkedHashMap<>();
+                    Map<String, Object> meta = new LinkedHashMap<>();
                     meta.put("resourceId", citation.resourceId().toString());
                     meta.put("resourceType", citation.resourceType().name());
                     meta.put("locatorJson", citation.locatorJson());
+                    meta.put("locator", citation.locatorJson());
                     meta.put("resourceName", name);
+                    meta.put("exactQuote", citation.exactQuote());
                     citationMap.put(idx++, meta);
                 }
             }
@@ -789,6 +792,48 @@ public class AgentTools {
         } catch (Exception e) {
             return Map.<String, Object>of("error", "问答失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * Enrich a search hit's citation meta with the source URL / publishedAt / summary,
+     * resolved from the underlying DocumentVersion (Story → StoryMember → DocumentVersion).
+     */
+    private Map<String, Object> enrichSearchHit(String type, String id, String title, String snippet) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("locatorJson", "{}");
+        meta.put("exactQuote", "");
+        meta.put("resourceName", title != null ? title : "无标题");
+        meta.put("summary", snippet != null ? snippet : "");
+        if (id == null) return meta;
+        try {
+            UUID uuid = UUID.fromString(id);
+            if ("story".equals(type)) {
+                repo.findStory(uuid).ifPresent(story -> {
+                    meta.put("resourceName", story.title());
+                    if (story.summary() != null) meta.put("summary", story.summary());
+                    // Best member (highest similarity) → DocumentVersion for canonicalUrl/publishedAt
+                    repo.storyMembers(uuid).stream()
+                            .max(Comparator.comparingDouble(StoryMember::similarity))
+                            .flatMap(member -> repo.findDocumentVersion(member.documentVersionId()))
+                            .ifPresent(dv -> applyDocumentVersion(meta, dv));
+                });
+            } else {
+                repo.findDocumentVersion(uuid).ifPresent(dv -> {
+                    meta.put("resourceName", dv.title());
+                    applyDocumentVersion(meta, dv);
+                });
+            }
+        } catch (IllegalArgumentException ignored) {
+            // not a UUID — keep the fallback fields
+        }
+        return meta;
+    }
+
+    private void applyDocumentVersion(Map<String, Object> meta, com.subtlesight.domain.Models.DocumentVersion dv) {
+        if (dv.canonicalUrl() != null && !dv.canonicalUrl().isBlank()) meta.put("url", dv.canonicalUrl());
+        if (dv.publishedAt() != null) meta.put("publishedAt", dv.publishedAt().toString());
+        if (dv.summary() != null && !dv.summary().isBlank()) meta.put("summary", dv.summary());
+        if (dv.title() != null && !dv.title().isBlank()) meta.put("resourceName", dv.title());
     }
 
     /** Resolve a human-readable name for a citation resource (document title or file name). */

@@ -66,4 +66,39 @@ describe('assistant run model', () => {
     expect(run.steps[0].effects?.[0].verified).toBe(true);
     expect(visibleActivities(run, false).at(-1)?.text).toBe('文档版本已更新为 6');
   });
+
+  it('threads citationMap and records onto the step and preserves them through tool_progress', () => {
+    let run = createAssistantRun('turn-5', '搜索资料');
+    run = applyAssistantRunEvent(run, { type: 'step_started', ordinal: 1, toolName: 'search_local', description: '搜索本地情报库' });
+    run = applyAssistantRunEvent(run, {
+      type: 'step_completed', ordinal: 1, toolName: 'search_local', success: true,
+      summary: '搜索到 2 条结果',
+      records: [
+        { resourceId: 'story-1', label: '故事一', detail: '片段', url: 'https://example.com/1' },
+        { resourceId: 'doc-1', label: '文档一', detail: '片段' },
+      ],
+      citationMap: {
+        1: { resourceId: 'story-1', resourceType: 'STORY', locatorJson: '{}', resourceName: '故事一' },
+        2: { resourceId: 'doc-1', resourceType: 'DOCUMENT', locatorJson: '{}', resourceName: '文档一' },
+      },
+    });
+    // A later tool_progress "succeeded" must not wipe records/citationMap
+    run = applyAssistantRunEvent(run, { type: 'tool_progress', ordinal: 1, toolName: 'search_local', phase: 'succeeded', summary: 'search_local 已完成' });
+
+    expect(run.steps[0].status).toBe('completed');
+    expect(run.steps[0].records).toHaveLength(2);
+    expect(run.steps[0].records?.[0].url).toBe('https://example.com/1');
+    expect(run.steps[0].citationMap?.[1].resourceId).toBe('story-1');
+  });
+
+  it('stores turn-level references from turn_completed', () => {
+    let run = createAssistantRun('turn-6', '搜索');
+    run = applyAssistantRunEvent(run, {
+      type: 'turn_completed', allSuccess: true,
+      references: [{ index: 1, resourceId: 'story-1', resourceType: 'STORY', resourceName: '故事一' }],
+    });
+    expect(run.status).toBe('completed');
+    expect(run.references?.[0].index).toBe(1);
+    expect(run.references?.[0].resourceId).toBe('story-1');
+  });
 });

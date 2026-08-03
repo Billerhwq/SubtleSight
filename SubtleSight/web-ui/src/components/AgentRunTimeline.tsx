@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { IconBolt, IconChevronDown, IconClose, IconTickCircle } from '@douyinfe/semi-icons';
 import { completedStepCount, visibleActivities } from './agentRunModel';
@@ -34,6 +34,7 @@ function statusCopy(run: AssistantRun): string {
 
 export function AgentRunTimeline({ run, onOpenLink }: { run: AssistantRun; onOpenLink: (link: RunLink) => void }): ReactNode {
   const [expanded, setExpanded] = useState(false);
+  const [highlightResourceId, setHighlightResourceId] = useState<string | null>(null);
   const completed = completedStepCount(run);
   const total = run.steps.length;
   const progress = total > 0 ? Math.min(100, (completed / total) * 100) : 0;
@@ -41,6 +42,26 @@ export function AgentRunTimeline({ run, onOpenLink }: { run: AssistantRun; onOpe
   const isLive = run.status === 'planning' || run.status === 'running';
   const activityStep = run.steps.find(step => step.status === 'active' || step.status === 'paused')
     ?? [...run.steps].reverse().find(step => step.status === 'completed' || step.status === 'failed');
+
+  // Listen for citation clicks in the answer — highlight the matching source record.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ resourceId?: string }>).detail;
+      if (!detail?.resourceId) return;
+      setHighlightResourceId(detail.resourceId);
+      const el = document.querySelector(`[data-resource-id="${detail.resourceId}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    window.addEventListener('subtlesight:citation-highlight', handler);
+    return () => window.removeEventListener('subtlesight:citation-highlight', handler);
+  }, []);
+
+  // Clear the flash highlight shortly after it fires.
+  useEffect(() => {
+    if (!highlightResourceId) return;
+    const t = setTimeout(() => setHighlightResourceId(null), 2600);
+    return () => clearTimeout(t);
+  }, [highlightResourceId]);
 
   return (
     <section className={`agent-run agent-run-${run.status}`} aria-label={`任务进度：${statusCopy(run)}`}>
@@ -80,7 +101,26 @@ export function AgentRunTimeline({ run, onOpenLink }: { run: AssistantRun; onOpe
                   <strong>{stepLabel(step)}</strong>
                   <span>{step.status === 'completed' ? verified ? '完成 · 已验证' : '完成' : step.status === 'failed' ? '失败' : step.status === 'paused' ? '待确认' : step.status === 'active' ? '进行中' : '等待'}</span>
                 </div>
-                {step.summary && !active && <p title={step.summary}>{step.summary}</p>}
+                {step.records && step.records.length > 0 && !active ? (
+                  <div className="agent-run-records">
+                    {step.records.map((rec, ri) => (
+                      <div
+                        key={ri}
+                        className={`agent-run-record${highlightResourceId === rec.resourceId ? ' flash' : ''}`}
+                        data-resource-id={rec.resourceId}
+                        title={rec.detail}
+                      >
+                        <span className="agent-run-record-name">{rec.label}</span>
+                        {rec.detail && <span className="agent-run-record-detail">{rec.detail}</span>}
+                        {rec.url && (
+                          <a href={rec.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>原文</a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : step.summary && !active ? (
+                  <p title={step.summary}>{step.summary}</p>
+                ) : null}
                 {step.links.length > 0 && !active && (
                   <div className="agent-run-links">
                     {step.links.map((link, index) => (

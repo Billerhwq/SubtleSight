@@ -137,6 +137,8 @@ export function KnowledgePage(): ReactNode {
   // Handle URL search params — open document / preview file, then clear params
   const [searchParams, setSearchParams] = useSearchParams();
   const lastOpenedRef = useRef<string | null>(null);
+  // Capture block/node highlight before params are cleared, so the editor can flash on mount
+  const [pendingHighlight, setPendingHighlight] = useState<{ blockId?: string; nodeId?: string }>({});
 
   useEffect(() => {
     const docId = searchParams.get('documentId');
@@ -147,6 +149,10 @@ export function KnowledgePage(): ReactNode {
       const doc = documents.find(d => d.id === docId);
       if (doc) {
         lastOpenedRef.current = docId;
+        setPendingHighlight({
+          blockId: searchParams.get('blockId') ?? undefined,
+          nodeId: searchParams.get('nodeId') ?? undefined,
+        });
         if (doc.folderId) openFolder(doc.folderId ?? null);
         setTimeout(() => {
           setEditingDocumentId(docId);
@@ -309,6 +315,7 @@ export function KnowledgePage(): ReactNode {
     // First switch back to browse mode
     setViewMode('browse');
     setEditingDocumentId(null);
+    setPendingHighlight({});
     // Invalidate to refresh the document list
     invalidate();
   };
@@ -658,8 +665,8 @@ export function KnowledgePage(): ReactNode {
           <KnowledgeEditorPage
             embedded
             documentId={editingDocumentId}
-            highlightBlockId={searchParams.get('blockId') ?? undefined}
-            highlightNodeId={searchParams.get('nodeId') ?? undefined}
+            highlightBlockId={pendingHighlight.blockId ?? searchParams.get('blockId') ?? undefined}
+            highlightNodeId={pendingHighlight.nodeId ?? searchParams.get('nodeId') ?? undefined}
             onBack={closeEdit}
           />
         </div>

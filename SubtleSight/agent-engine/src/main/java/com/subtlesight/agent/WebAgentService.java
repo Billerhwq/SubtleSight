@@ -8,6 +8,7 @@ import com.subtlesight.domain.AssistantModels.TurnStatus;
 import com.subtlesight.domain.Models.AgentRequest;
 import com.subtlesight.domain.Models.AgentResponse;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -78,7 +79,7 @@ public final class WebAgentService {
                 OrchestrationResult or = orchestrator.orchestrate(
                         turnId, sessionId, message, request.context(), true);
                 List<String> tools = or.executions().stream().map(e->e.tool()).distinct().toList();
-                return new AgentResponse(or.summary(),tools,Map.of("executions",or.executions().size()),false,turnId,sessionId);
+                return new AgentResponse(or.summary(),tools,resultMap(or),false,turnId,sessionId);
             }
             // Run orchestration asynchronously so the HTTP request returns immediately;
             // results are streamed via SSE events.
@@ -100,7 +101,7 @@ public final class WebAgentService {
                 OrchestrationResult or = orchestrator.orchestrate(
                         turnId, sessionId, message, request.context(), false);
                 List<String> tools = or.executions().stream().map(e->e.tool()).distinct().toList();
-                return new AgentResponse(or.summary(),tools,Map.of("executions",or.executions().size()),false,turnId,sessionId);
+                return new AgentResponse(or.summary(),tools,resultMap(or),false,turnId,sessionId);
             }
             return new AgentResponse("正在分析您的请求…",List.of(),Map.of(),false,turnId,sessionId);
         }
@@ -165,6 +166,17 @@ public final class WebAgentService {
     }
 
     @FunctionalInterface public interface ToolExecutor{Map<String,Object> execute(String tool,String message,Map<String,Object> context);}
+
+    /** Build the sync-path result map including structured references. */
+    private static Map<String, Object> resultMap(OrchestrationResult or) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("executions", or.executions().size());
+        result.put("references", or.references().stream().map(r -> Map.<String, Object>of(
+                "index", r.index(), "resourceId", r.resourceId(), "resourceType", r.resourceType(),
+                "resourceName", r.resourceName(), "url", r.url(), "publishedAt", r.publishedAt(),
+                "summary", r.summary(), "locator", r.locator(), "exactQuote", r.exactQuote())).toList());
+        return result;
+    }
 
     private static String write(Object value){
         if(value==null)return null;

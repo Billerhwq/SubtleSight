@@ -45,13 +45,36 @@ public final class OrchestratorModels {
         }
     }
 
+    /** A structured citation source attached to a synthesized answer. */
+    public record CitationReference(
+            int index, String resourceId, String resourceType, String resourceName,
+            String url, String publishedAt, String summary, String locator, String exactQuote) {
+        public CitationReference {
+            resourceId = resourceId == null ? "" : resourceId;
+            resourceType = resourceType == null ? "" : resourceType;
+            resourceName = resourceName == null ? "" : resourceName;
+            url = url == null ? "" : url;
+            publishedAt = publishedAt == null ? "" : publishedAt;
+            summary = summary == null ? "" : summary;
+            locator = locator == null ? "" : locator;
+            exactQuote = exactQuote == null ? "" : exactQuote;
+        }
+    }
+
     public record OrchestrationResult(
             UUID turnId, List<ToolExecution> executions, String summary,
-            boolean confirmationRequired, String confirmingTool) {
+            boolean confirmationRequired, String confirmingTool,
+            List<CitationReference> references) {
+        public OrchestrationResult(UUID turnId, List<ToolExecution> executions, String summary,
+                                   boolean confirmationRequired, String confirmingTool) {
+            this(turnId, executions, summary, confirmationRequired, confirmingTool, List.of());
+        }
+
         public OrchestrationResult {
             executions = executions == null ? List.of() : List.copyOf(executions);
             summary = summary == null ? "" : summary;
             confirmingTool = confirmingTool == null ? "" : confirmingTool;
+            references = references == null ? List.of() : List.copyOf(references);
         }
     }
 

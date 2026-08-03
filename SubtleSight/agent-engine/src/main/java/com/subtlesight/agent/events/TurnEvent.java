@@ -2,6 +2,7 @@ package com.subtlesight.agent.events;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -130,9 +131,18 @@ public record TurnEvent(
     }
 
     public static TurnEvent turnCompleted(UUID turnId, int executions, boolean allSuccess) {
-        return new TurnEvent(turnId.toString(), "turn_completed", Map.of(
-                "turnId", turnId.toString(), "executions", executions,
-                "allSuccess", allSuccess), Instant.now());
+        return turnCompleted(turnId, executions, allSuccess, null, null);
+    }
+
+    public static TurnEvent turnCompleted(UUID turnId, int executions, boolean allSuccess,
+                                          String answer, List<Map<String, Object>> references) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("turnId", turnId.toString());
+        data.put("executions", executions);
+        data.put("allSuccess", allSuccess);
+        if (answer != null) data.put("answer", answer);
+        if (references != null && !references.isEmpty()) data.put("references", references);
+        return new TurnEvent(turnId.toString(), "turn_completed", data, Instant.now());
     }
 
     public static TurnEvent error(UUID turnId, String message) {

@@ -9,7 +9,9 @@ import { postTurn, subscribeTurnEvents, confirmTurn, cancelTurn, listSessions, u
 import { QaPanel } from './QaPanel';
 import { AgentRunTimeline } from './AgentRunTimeline';
 import { applyAssistantRunEvent, createAssistantRun } from './agentRunModel';
-import type { AssistantRun, AssistantRunEvent, RunLink } from './agentRunModel';
+import type { AssistantRun, AssistantRunEvent, RunLink, RunStepRecord } from './agentRunModel';
+import { buildCitationMap, CitationMarker, CitationTemplateHint, handleCitationNav } from './citations';
+import type { CitationMeta, Reference } from './citations';
 import type { AssistantSession } from '../types';
 
 // ── State machine ──
@@ -21,9 +23,8 @@ type DrawerState =
   | { kind: 'done' }
   | { kind: 'error'; message: string };
 
-type CitationMeta = { resourceId: string; resourceType: string; locatorJson: string; resourceName: string };
 type ResLink = RunLink;
-type Message = { role: 'user' | 'agent'; text: string; tools?: string[]; confirmationRequired?: boolean; turnId?: string; kind?: 'thinking' | 'result'; links?: ResLink[]; citationMap?: Record<number, CitationMeta>; streaming?: boolean };
+type Message = { role: 'user' | 'agent'; text: string; tools?: string[]; confirmationRequired?: boolean; turnId?: string; kind?: 'thinking' | 'result'; links?: ResLink[]; citationMap?: Record<number, CitationMeta>; references?: Reference[]; streaming?: boolean };
 
 // ── Derive page context from current route ──
 function usePageContext(): Record<string, unknown> {
@@ -45,40 +46,6 @@ function usePageContext(): Record<string, unknown> {
 
 const WELCOME: Message = { role: 'agent', text: '告诉我你想追踪什么、核实什么，或要建立怎样的发现视图。', kind: 'result' };
 
-/** Build a navigation URL from a citation marker's metadata. */
-function buildCitationUrl(meta: CitationMeta): string | null {
-  try {
-    const loc = JSON.parse(meta.locatorJson || '{}');
-    const type = meta.resourceType.toUpperCase();
-    if (type === 'DOCUMENT' || type === 'DRAW_NODE') {
-      const blockId = loc.metadata?.blockId || loc.blockId;
-      const nodeId = loc.metadata?.nodeId || loc.nodeId;
-      let url = `/knowledge?documentId=${meta.resourceId}`;
-      if (blockId) url += `&blockId=${encodeURIComponent(blockId)}`;
-      if (nodeId) url += `&nodeId=${encodeURIComponent(nodeId)}`;
-      return url;
-    }
-    if (type === 'FILE') {
-      return `/knowledge?fileId=${meta.resourceId}`;
-    }
-    if (type === 'STORY') {
-      return `/stories/${meta.resourceId}`;
-    }
-    // Non-navigable types (e.g. DOCUMENTVERSION from search_local) — show name on hover only
-    if (type === 'DOCUMENTVERSION' || type === 'INTELLIGENCE') {
-      return null;
-    }
-    return `/knowledge?documentId=${meta.resourceId}`;
-  } catch {
-    return `/knowledge-editor.html#/knowledge?documentId=${meta.resourceId}`;
-  }
-}
-
-/** Navigate citations via HashRouter — no full page reload. */
-function handleCitationNav(url: string): void {
-  window.location.hash = url.startsWith('/') ? url : `/${url}`;
-}
-
 /** Extract a short title from a step's result text for collapsed display. */
 function extractStepTitle(text: string): string {
   // Take the first meaningful line, strip markdown, limit to 60 chars
@@ -86,8 +53,8 @@ function extractStepTitle(text: string): string {
   return firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine || '执行完成';
 }
 
-/** Render text with clickable [N] citation markers. */
-function renderTextWithCitations(text: string, citationMap?: Record<number, CitationMeta>, navigate?: (url: string) => void): ReactNode {
+/** Render text with clickable [N] citation markers (hover card + click-to-jump). */
+function renderTextWithCitations(text: string, citationMap?: Record<number, CitationMeta>, navigate?: (url: string | null, meta: CitationMeta) => void): ReactNode {
   if (!citationMap || Object.keys(citationMap).length === 0) {
     return text;
   }
@@ -103,24 +70,14 @@ function renderTextWithCitations(text: string, citationMap?: Record<number, Cita
       parts.push(text.slice(lastIndex, match.index));
     }
     if (meta) {
-      const url = buildCitationUrl(meta);
       citeIdx++;
       parts.push(
-        <sup
+        <CitationMarker
           key={`cite-${num}-${citeIdx}`}
-          className="citation-marker"
-          title={`${meta.resourceName}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (navigate && url) {
-              navigate(url);
-            } else if (url) {
-              window.open(url, '_self');
-            }
-          }}
-        >
-          [{match[1]}]
-        </sup>
+          num={match[1]}
+          meta={meta}
+          onNavigate={navigate}
+        />
       );
     } else {
       parts.push(`[${match[1]}]`);
@@ -131,6 +88,41 @@ function renderTextWithCitations(text: string, citationMap?: Record<number, Cita
     parts.push(text.slice(lastIndex));
   }
   return parts.length > 0 ? parts : text;
+}
+
+/** Build structured, highlightable records from a search/qa tool result. */
+function buildRecords(toolName: string, result: Record<string, unknown>): RunStepRecord[] {
+  const r = result as any;
+  if (toolName === 'search_local') {
+    const hits = r.hits as any[] | undefined;
+    if (!hits) return [];
+    const citations = r.citationMap as Record<number, CitationMeta> | undefined;
+    return hits.map((h: any, i: number) => ({
+      resourceId: h.id,
+      label: h.title ?? '无标题',
+      detail: h.snippet,
+      url: citations?.[i + 1]?.url,
+    }));
+  }
+  if (toolName === 'search_documents') {
+    const results = r.results as any[] | undefined;
+    if (!results) return [];
+    return results.map((item: any) => ({
+      resourceId: item.id,
+      label: item.title ?? item.name ?? '无名称',
+      detail: item.type === 'folder' ? undefined : item.path,
+    }));
+  }
+  if (toolName === 'ask_question') {
+    const citations = r.citations as any[] | undefined;
+    if (!citations) return [];
+    return citations.map((c: any) => ({
+      resourceId: c.resourceId,
+      label: c.resourceName ?? `${c.resourceType}/${String(c.resourceId ?? '').substring(0, 8)}`,
+      detail: c.exactQuote,
+    }));
+  }
+  return [];
 }
 
 /** Fetch and display context snapshot for a turn. */
@@ -187,6 +179,11 @@ export function AgentDrawer(): ReactNode {
   const pageContext = usePageContext();
   const context = { ...pageContext, ...agentContext };
   const busy = state.kind === 'thinking' || state.kind === 'streaming';
+  // Show a citation-style preview when the last agent reply asks the user for a source link.
+  const lastAgentMessage = [...messages].reverse().find(m => m.role === 'agent');
+  const showCitationTemplateHint = !!lastAgentMessage
+    && !(lastAgentMessage.references && lastAgentMessage.references.length > 0)
+    && /提供.{0,8}(链接|url)|资料链接|source url|请提供.{0,8}(链接|url)/i.test(lastAgentMessage.text);
 
   // Load sessions on mount
   const loadSessions = useCallback(async () => {
@@ -315,6 +312,7 @@ export function AgentDrawer(): ReactNode {
         }) : undefined;
       const { text: resultText, links: resultLinks } = formatToolResult(toolName, success, result);
       const citationMap = (result.citationMap as Record<number, CitationMeta>) ?? undefined;
+      const records = buildRecords(toolName, result);
       const ordinal = Number(data.ordinal ?? 0);
       updateRun(turnId, {
         type: 'step_completed', ordinal, toolName, success,
@@ -323,6 +321,8 @@ export function AgentDrawer(): ReactNode {
         callId: toolResult?.callId ? String(toolResult.callId) : data.callId ? String(data.callId) : undefined,
         summary: resultText || String(toolResult?.content ?? ''),
         links: resultLinks,
+        records,
+        citationMap,
         effects,
       });
       const hasVerifiedResourceEffect = effects?.some(effect => effect.verified && effect.type.startsWith('resource.'));
@@ -349,11 +349,12 @@ export function AgentDrawer(): ReactNode {
       setState({ kind: 'awaiting_confirm', turnId, tools: [toolName], message: desc });
     });
 
-    // streaming_chunk → synthesis text — replace the last agent message
+    // streaming_chunk → synthesis text — replace the last agent message.
+    // Note: deliberately NOT fed into the run model — the answer must not leak into
+    // the execution-details activity panel (would duplicate the result bubble).
     onEvent('streaming_chunk', (data) => {
       const chunk = data.chunk as string ?? '';
       if (!chunk) return;
-      updateRun(turnId, { type: 'streaming_chunk', chunk });
       setState({ kind: 'streaming', turnId, chunk });
       setMessages(prev => {
         const copy = [...prev];
@@ -363,14 +364,38 @@ export function AgentDrawer(): ReactNode {
             return copy;
           }
         }
-        return [...copy, { role: 'agent', text: chunk, turnId, kind: 'result', streaming: true }];
+        // No existing result — insert right after this turn's user message so replaying
+        // an older turn's events never pushes its answer after newer turns.
+        const userIdx = copy.findIndex(m => m.role === 'user' && m.turnId === turnId);
+        const newResult: Message = { role: 'agent', text: chunk, turnId, kind: 'result', streaming: true };
+        if (userIdx >= 0) {
+          copy.splice(userIdx + 1, 0, newResult);
+          return copy;
+        }
+        return [...copy, newResult];
       });
     });
 
-    // turn_completed → done, stop cursor
+    // turn_completed → done, replace the streamed text with the anchored answer + references
     onEvent('turn_completed', (data) => {
-      setMessages(prev => prev.map(m => m.turnId === turnId ? { ...m, streaming: false } : m));
-      updateRun(turnId, { type: 'turn_completed', allSuccess: data.allSuccess !== false });
+      const answer = data.answer ? String(data.answer) : undefined;
+      const references = Array.isArray(data.references)
+        ? data.references as Reference[]
+        : undefined;
+      setMessages(prev => prev.map(m => {
+        // Only rewrite the agent result message — never the user's own prompt.
+        if (m.turnId !== turnId || m.role !== 'agent') return m;
+        const next: Message = { ...m, streaming: false };
+        if (answer) next.text = answer;
+        if (references) next.references = references;
+        return next;
+      }));
+      updateRun(turnId, {
+        type: 'turn_completed',
+        allSuccess: data.allSuccess !== false,
+        answer,
+        references,
+      });
       setState({ kind: 'done' });
       closeSse();
     });
@@ -674,6 +699,18 @@ export function AgentDrawer(): ReactNode {
     }
   };
 
+  /** Navigate a citation: highlight the matching record in the execution panel, then jump. */
+  const navigateCitation = (url: string | null, meta: CitationMeta) => {
+    if (url) {
+      window.dispatchEvent(new CustomEvent('subtlesight:citation-highlight', {
+        detail: { resourceId: meta.resourceId },
+      }));
+      handleCitationNav(url);
+    } else if (meta.url) {
+      window.open(meta.url, '_blank', 'noopener');
+    }
+  };
+
   const stopCurrentTurn = async () => {
     const turnId = state.kind === 'thinking' || state.kind === 'streaming' ? state.turnId : undefined;
     if (!turnId) return;
@@ -740,12 +777,21 @@ export function AgentDrawer(): ReactNode {
       if (m.role === 'user') {
         groups.push({ turnId: m.turnId, userMsg: m, thinking: [], result: null });
       } else if (m.kind === 'result') {
-        const last = groups[groups.length - 1];
-        if (last && last.turnId === m.turnId) {
-          last.result = m;
-          last.turnId = m.turnId;
+        // Merge into the turn group that owns this result's user message. Results may
+        // arrive out of order (SSE replay on subscribe), so search all groups instead of
+        // only the last one — otherwise a stale result becomes a standalone bubble that
+        // duplicates the answer.
+        let target: (typeof groups)[number] | undefined;
+        for (let i = groups.length - 1; i >= 0; i -= 1) {
+          if (groups[i].turnId === m.turnId) {
+            target = groups[i];
+            if (groups[i].userMsg) break;
+          }
+        }
+        if (target) {
+          target.result = m;
         } else {
-          // Standalone result (no thinking prefix)
+          // Genuinely orphaned result (no user group) — keep it standalone.
           groups.push({ turnId: m.turnId, thinking: [], result: m });
         }
       } else {
@@ -802,7 +848,7 @@ export function AgentDrawer(): ReactNode {
                             <span className="step-card-title">{extractStepTitle(m.text)}</span>
                           </div>
                           <div className="step-card-body">
-                            <p>{renderTextWithCitations(m.text, m.citationMap, handleCitationNav)}</p>
+                            <p>{renderTextWithCitations(m.text, m.citationMap, navigateCitation)}</p>
                             {renderLinks(m)}
                             {m.tools?.map(t => <code key={t}>{t}</code>)}
                           </div>
@@ -818,7 +864,7 @@ export function AgentDrawer(): ReactNode {
             {g.result && (
               <div className="chat agent result-bubble">
                 <p>
-                  {renderTextWithCitations(g.result.text, g.result.citationMap, handleCitationNav)}
+                  {renderTextWithCitations(g.result.text, buildCitationMap(g.result.references) ?? g.result.citationMap, navigateCitation)}
                   {g.result.streaming && <span className="typing-cursor">|</span>}
                 </p>
                 {renderLinks(g.result)}
@@ -864,6 +910,7 @@ export function AgentDrawer(): ReactNode {
       width={showSessionList ? 870 : 590}
       footer={mode === 'qa' ? undefined : (
         <div className="agent-compose">
+          {showCitationTemplateHint && <CitationTemplateHint />}
           <TextArea
             autosize rows={2} value={text} onChange={setText}
             onEnterPress={e => { if (!e.shiftKey) { e.preventDefault(); send(); } }}

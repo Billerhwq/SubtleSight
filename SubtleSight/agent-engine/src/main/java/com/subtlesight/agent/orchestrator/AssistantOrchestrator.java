@@ -20,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -38,6 +39,12 @@ public final class AssistantOrchestrator {
     private final ActionPolicy policy;
     private final AiProvider ai;
     private final ObjectMapper json = new ObjectMapper();
+
+    /** Synthesized text plus the global citation registry the LLM saw (indices align). */
+    record SynthesisOutput(String text, Map<Integer, CitationReference> registry) {}
+
+    /** Anchored answer with only the references actually cited by a surviving [N] marker. */
+    record AnchoredSynthesis(String answer, List<CitationReference> references) {}
 
     /** Backward-compatible SSE callback for existing wiring. */
     @FunctionalInterface
@@ -201,10 +208,11 @@ public final class AssistantOrchestrator {
         }
 
         // 3. Synthesize — feed tool results back to LLM for a natural-language response
-        String synthesis = null;
+        SynthesisOutput synth = null;
         if (ai != null && !executions.isEmpty()) {
-            synthesis = synthesize(turnId, message, executions);
+            synth = synthesize(turnId, message, executions);
         }
+        String synthesis = synth != null ? synth.text() : null;
 
         // 3b. Backfill created documents with synthesis content
         if (synthesis != null && !synthesis.isBlank()) {
@@ -223,10 +231,6 @@ public final class AssistantOrchestrator {
                             updateParams.put("documentId", id);
                             updateParams.put("content", "<div>" + synthesis.replace("\n", "</div><div>") + "</div>");
                             updateParams.put("changeSummary", "AI 自动填充内容");
-                            Object createdVersion = te.result().get("version");
-                            if (createdVersion instanceof Number number) {
-                                updateParams.put("expectedVersion", number.intValue());
-                            }
 
                             publish(TurnEvent.stepStarted(turnId, ordinal, updateDefinition.name(),
                                     "填充新建文档正文", callId, updateDefinition.id(),
@@ -278,26 +282,34 @@ public final class AssistantOrchestrator {
             }
         }
 
-        // 4. turn_completed
+        // 4. Ground, anchor citations, then turn_completed with the structured answer + references
         if (repo != null) repo.updateTurnStatus(turnId, TurnStatus.COMPLETED,
                 write(plan), writeExecutions(executions));
         boolean allSuccess = executions.stream().allMatch(ToolExecution::success);
-        publish(TurnEvent.turnCompleted(turnId, executions.size(), allSuccess));
-
-        synthesis = enforceGroundedSummary(message, executions, synthesis);
-        String summary = synthesis != null ? synthesis
-                : executions.size() + " 个步骤已执行";
-        return new OrchestrationResult(turnId, executions, summary, false, "");
+        String grounded = enforceGroundedSummary(message, executions, synthesis);
+        AnchoredSynthesis anchored = grounded == null
+                ? null : anchorReferences(grounded, synth == null ? null : synth.registry());
+        publish(TurnEvent.turnCompleted(turnId, executions.size(), allSuccess,
+                anchored == null ? null : anchored.answer(),
+                anchored == null ? null : referencesToMaps(anchored.references())));
+        String summary = anchored != null && anchored.answer() != null && !anchored.answer().isBlank()
+                ? anchored.answer()
+                : (grounded != null ? grounded : executions.size() + " 个步骤已执行");
+        return new OrchestrationResult(turnId, executions, summary, false, "",
+                anchored == null ? List.of() : anchored.references());
     }
 
     /** Feed tool execution results back to the LLM for a natural-language summary. */
-    private String synthesize(UUID turnId, String userMessage, List<ToolExecution> executions) {
+    private SynthesisOutput synthesize(UUID turnId, String userMessage, List<ToolExecution> executions) {
         try {
+            AtomicInteger nextGlobal = new AtomicInteger(1);
+            Map<Integer, CitationReference> registry = new LinkedHashMap<>();
             StringBuilder results = new StringBuilder();
             for (ToolExecution e : executions) {
+                Map<String, Object> rekeyed = rekeyStepResult(e, registry, nextGlobal);
                 results.append("- ").append(e.tool()).append(": ");
                 if (e.success()) {
-                    results.append(summarizeResult(e.tool(), e.result()));
+                    results.append(summarizeResult(e.tool(), rekeyed));
                 } else {
                     results.append("失败 — ").append(e.error());
                 }
@@ -315,8 +327,10 @@ public final class AssistantOrchestrator {
                     - 工具失败时必须明确说明未完成，不得根据用户请求臆测执行成功
                     - 不要重复"已执行N个步骤"之类的内容
                     - 控制在 3-8 句话以内
+                    - 禁止输出 "来源："、"参考："、"引用：" 等自由文本标注，一律使用 [N] 角标，且 N 必须出现在 [引用来源] 列表中
                     - 如果工具结果中包含 [引用来源: ...]，你必须在回答中使用对应的 [1]、[2] 等角标标注信息出处，
                       角标放在被引用句子的末尾，例如："该功能支持并行计算[1]，并通过认证机制保证正确性[2]"
+                    - 如果检索结果为 0 条且无法回答，明确告诉用户缺少资料并引导其提供资料链接；不要编造不存在的来源
                     """;
 
             String userPrompt = "用户请求: " + userMessage + "\n\n工具执行结果:\n" + results;
@@ -326,12 +340,109 @@ public final class AssistantOrchestrator {
             String content = aiResult.content();
             if (content != null && !content.isBlank()) {
                 publish(TurnEvent.streamingChunk(turnId, content));
-                return content;
+                return new SynthesisOutput(content, registry);
             }
         } catch (Exception e) {
             LOG.warn("Synthesis failed for turn {}: {}", turnId, e.getMessage());
         }
         return null;
+    }
+
+    /** Re-key a step's citationMap entries to global indices and register them. */
+    private static Map<String, Object> rekeyStepResult(ToolExecution e,
+                                                       Map<Integer, CitationReference> registry,
+                                                       AtomicInteger nextGlobal) {
+        Map<String, Object> rekeyed = new LinkedHashMap<>(e.result());
+        Object cmObj = e.result().get("citationMap");
+        if (!(cmObj instanceof Map<?, ?> cm) || cm.isEmpty()) return rekeyed;
+        Map<Integer, Object> globalMap = new LinkedHashMap<>();
+        for (var entry : cm.entrySet()) {
+            Object metaObj = entry.getValue();
+            if (!(metaObj instanceof Map<?, ?> meta)) continue;
+            try {
+                Integer.parseInt(String.valueOf(entry.getKey()));
+            } catch (NumberFormatException ex) {
+                continue;
+            }
+            int g = nextGlobal.getAndIncrement();
+            registry.put(g, toReference(g, meta));
+            globalMap.put(g, new LinkedHashMap<>((Map<?, ?>) meta));
+        }
+        rekeyed.put("citationMap", globalMap);
+        return rekeyed;
+    }
+
+    private static CitationReference toReference(int index, Map<?, ?> meta) {
+        return new CitationReference(
+                index,
+                str(meta.get("resourceId")),
+                str(meta.get("resourceType")),
+                str(meta.get("resourceName")),
+                str(meta.get("url")),
+                str(meta.get("publishedAt")),
+                str(meta.get("summary")),
+                str(meta.get("locatorJson")),
+                str(meta.get("exactQuote")));
+    }
+
+    private static String str(Object o) {
+        return o == null ? "" : o.toString();
+    }
+
+    /**
+     * Validate the LLM's [N] markers against the retrieved references:
+     * strip freeform "来源：/参考：/引用：" fragments (standalone lines or inline),
+     * drop markers with no backing source, and emit only the references actually cited.
+     * Package-private for unit tests.
+     */
+    static AnchoredSynthesis anchorReferences(String text, Map<Integer, CitationReference> registry) {
+        if (text == null || text.isBlank() || registry == null || registry.isEmpty()) {
+            return new AnchoredSynthesis(text == null ? "" : text, List.of());
+        }
+        String cleaned = text
+                .replaceAll("(?m)^\\s*(?:来源|参考|引用)\\s*[:：][^\\n]*\\n?", "")
+                .replaceAll("(?:来源|参考|引用)\\s*[:：][^，。；;！!\\n]*", "");
+        Set<Integer> cited = new LinkedHashSet<>();
+        Matcher matcher = Pattern.compile("\\[(\\d{1,3})\\]").matcher(cleaned);
+        StringBuilder out = new StringBuilder();
+        int last = 0;
+        while (matcher.find()) {
+            out.append(cleaned, last, matcher.start());
+            int n;
+            try {
+                n = Integer.parseInt(matcher.group(1));
+            } catch (NumberFormatException e) {
+                n = -1;
+            }
+            if (registry.containsKey(n)) {
+                out.append("[").append(n).append("]");
+                cited.add(n);
+            }
+            last = matcher.end();
+        }
+        out.append(cleaned.substring(last));
+        String answer = out.toString()
+                .replaceAll("[，,、；;]+\\s*$", "")
+                .replaceAll("\\n{3,}", "\n\n")
+                .trim();
+        List<CitationReference> refs = cited.stream().sorted().map(registry::get).toList();
+        return new AnchoredSynthesis(answer, refs);
+    }
+
+    private static List<Map<String, Object>> referencesToMaps(List<CitationReference> refs) {
+        return refs.stream().map(r -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("index", r.index());
+            m.put("resourceId", r.resourceId());
+            m.put("resourceType", r.resourceType());
+            m.put("resourceName", r.resourceName());
+            m.put("url", r.url());
+            m.put("publishedAt", r.publishedAt());
+            m.put("summary", r.summary());
+            m.put("locator", r.locator());
+            m.put("exactQuote", r.exactQuote());
+            return m;
+        }).toList();
     }
 
     /** Generate substantive HTML before executing planner-added document updates. */
